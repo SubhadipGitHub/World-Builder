@@ -9,6 +9,7 @@ import type { Snapshot } from '../../sim/world';
 import type { Alert } from '../alerts';
 import type { CrewLevel, CrewStation, PresetId } from '../../config/scenarios';
 import type { FacilityId, FacilityStatus } from '../facilities';
+import type { PlaceId, PlaceLabel } from '../places';
 import type { KpiCard, KpiId } from '../kpis';
 import { DetailPanel } from '../m1/DetailPanel';
 import { WhatIfDrawer, type OutageGroup } from '../m4/WhatIfDrawer';
@@ -43,6 +44,8 @@ export interface DashboardData {
   readonly facilities: readonly FacilityStatus[];
   /** Compact labels when zoomed out (I-4). */
   readonly compactLabels: boolean;
+  /** Airport name labels (L-1). */
+  readonly places: readonly PlaceLabel[];
 }
 
 export interface TableData {
@@ -80,6 +83,8 @@ export interface DashboardProps {
   readonly onLabels: (on: boolean) => void;
   /** Flies the camera to a facility (Q2). */
   readonly onFacility: (id: FacilityId) => void;
+  /** Flies the camera to an airport place (L-1). */
+  readonly onPlace: (id: PlaceId) => void;
 }
 
 /** What-if wiring (§9): levers go to the visible simulation only; speed to both (W7–W9). */
@@ -111,7 +116,7 @@ export function Dashboard(props: DashboardProps): JSX.Element {
 
   return (
     <div class="dashboard">
-      {settings.labels ? <FacilityLabels statuses={data.facilities} compact={data.compactLabels} onSelect={props.onFacility} /> : null}
+      {settings.labels ? <FacilityLabels statuses={data.facilities} compact={data.compactLabels} onSelect={props.onFacility} places={data.places} onPlace={props.onPlace} /> : null}
       <TopBar
         snapshot={data.snapshot}
         unitIds={props.unitIds}

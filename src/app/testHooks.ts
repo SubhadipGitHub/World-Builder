@@ -54,6 +54,12 @@ export interface HubTestHooks {
   boomOpen(id: 'entry' | 'exit'): number;
   /** Patrol car pose, or null when hidden (SEC-4). */
   patrolPose(): { readonly x: number; readonly z: number } | null;
+  /** Airport name labels currently shown (L-1). */
+  placeLabels(): readonly { readonly id: string; readonly text: string; readonly visible: boolean }[];
+  /** Every aircraft at the current airport time (F-1). */
+  aircraft(): readonly { readonly id: string; readonly phase: string; readonly x: number; readonly y: number; readonly z: number; readonly gate: string | null }[];
+  /** Airport clock (H2): advances with the simulation speed, frozen while paused. */
+  airportTime(): number;
 }
 
 declare global {

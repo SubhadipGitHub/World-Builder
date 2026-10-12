@@ -1,11 +1,18 @@
 import type { JSX } from 'preact';
 import { STATE_LABEL, labelName, type FacilityId, type FacilityStatus } from '../facilities';
+import type { PlaceId, PlaceLabel } from '../places';
 
 export interface FacilityLabelsProps {
   readonly statuses: readonly FacilityStatus[];
   /** Compact mode when zoomed out (I-4): name and status only. */
   readonly compact: boolean;
   readonly onSelect: (id: FacilityId) => void;
+  /**
+   * Airport name labels (L-1): a button per place (class "facility-label place-label",
+   * `data-place` = id, aria-label = the name) with only the name; clicking calls onPlace(id).
+   */
+  readonly places?: readonly PlaceLabel[];
+  readonly onPlace?: (id: PlaceId) => void;
 }
 
 /**
@@ -16,7 +23,7 @@ export interface FacilityLabelsProps {
  *  - the detail line, unless compact
  * Clicking calls onSelect(id).
  */
-export function FacilityLabels({ statuses, compact, onSelect }: FacilityLabelsProps): JSX.Element {
+export function FacilityLabels({ statuses, compact, onSelect, places = [], onPlace }: FacilityLabelsProps): JSX.Element {
   return (
     <div class="facility-labels">
       {statuses.map((s) => (
@@ -36,6 +43,20 @@ export function FacilityLabels({ statuses, compact, onSelect }: FacilityLabelsPr
             {STATE_LABEL[s.state]}
           </span>
           {compact ? null : <span class="facility-detail">{s.detail}</span>}
+        </button>
+      ))}
+      {places.map((p) => (
+        <button
+          key={p.id}
+          type="button"
+          class="facility-label place-label"
+          data-place={p.id}
+          aria-label={p.name}
+          onClick={() => {
+            onPlace?.(p.id);
+          }}
+        >
+          {p.name}
         </button>
       ))}
     </div>

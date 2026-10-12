@@ -4,7 +4,7 @@ import { Raycaster, Vector2, Vector3 } from 'three';
 import { rates } from '../config/rates';
 import type { WeatherMode } from '../config/weather';
 import { hub, type AreaId } from '../layout/hub';
-import { areaById, hubBounds, unitMarker, unitPose } from '../layout/positions';
+import { areaById, unitMarker, unitPose } from '../layout/positions';
 import { createAgentLayer } from '../render/agents';
 import { createAtmosphere } from '../render/atmosphere';
 import { createCameraRig } from '../render/camera';
@@ -18,7 +18,12 @@ import { createQualityController, settingsFor } from '../render/quality';
 import { createRain } from '../render/rain';
 import { createScene } from '../render/scene';
 import { createSelectionRing } from '../render/selection';
+import { airportPlan } from '../airport/plan';
+import { airportTexts, createAirportView } from '../render/airport/view';
 import { createSiteView } from '../render/site';
+import { signEntries } from '../render/site/signs';
+import { createTextAtlas } from '../render/text/atlas';
+import { sitePlan } from '../layout/site';
 import { createSkyView, skyColours } from '../render/sky';
 import { buildWorld } from '../render/world';
 import type { Vec2 } from '../sim/types';
@@ -28,7 +33,9 @@ import { createAlertFeed } from '../ui/alerts';
 import { formatClock, unitLabel } from '../ui/format';
 import { COMPACT_DISTANCE, FACILITIES, declutter, facilityStatuses, type FacilityId, type FacilityStatus } from '../ui/facilities';
 import { createKpiTracker, type KpiId } from '../ui/kpis';
+import { PLACES, type PlaceId } from '../ui/places';
 import { LABELS_KEY, loadFlag, saveFlag } from '../ui/prefs';
+import { cameraLimits } from './limits';
 import type { Speed } from '../ui/m4/SpeedControl';
 import {
   createWeatherMemory,
@@ -108,8 +115,11 @@ function start(root: HTMLElement): void {
   const ring = createSelectionRing(paletteFor(theme));
   const rain = createRain();
   const sky = createSkyView();
-  const site = createSiteView(paletteFor(theme));
-  scene.add(sky.group, site.group, world.group, agents.group, ring.mesh, rain.mesh);
+  // One text atlas for the hub site and the airport (H7).
+  const atlas = createTextAtlas([...signEntries(sitePlan()), ...airportTexts()]);
+  const site = createSiteView(paletteFor(theme), atlas);
+  const airport = createAirportView(paletteFor(theme), atlas);
+  scene.add(sky.group, site.group, airport.group, world.group, agents.group, ring.mesh, rain.mesh);
   const atmosphere = createAtmosphere({ renderer, scene, hemi, sun, world, agents, rain }, paletteFor(theme));
   atmosphere.setPalette(paletteFor(theme));
   const post = createPostPipeline(renderer, scene, camera);
@@ -134,8 +144,8 @@ function start(root: HTMLElement): void {
   let qualityTier = quality.tier;
   applyQuality(qualityTier);
 
-  const bounds = hubBounds(20);
-  const limits: CameraLimits = { ...bounds, minDistance: 25, maxDistance: 600, minPolar: 0.35, maxPolar: 1.25 };
+  // The hub plus the airport, out to 1,100 m (L-2).
+  const limits: CameraLimits = cameraLimits();
   const rig = createCameraRig(camera, canvas, limits);
   const overview = areaById('overview');
   rig.jump({ target: { x: overview.x, z: overview.z }, distance: overview.distance, azimuth: Math.PI / 4, polar: 0.85 });
@@ -193,6 +203,7 @@ function start(root: HTMLElement): void {
       deltas: kpiDeltas(metrics),
       facilities: settings.value.labels ? facilityStatuses(curr) : [],
       compactLabels: rig.state().distance > COMPACT_DISTANCE,
+      places: settings.value.labels ? PLACES.map((p) => ({ id: p.id, name: p.name })) : [],
       queues: queueSummary(curr),
       baselineQueues,
     };
@@ -210,6 +221,8 @@ function start(root: HTMLElement): void {
   /** Applies commands to the visible simulation only, then shows their effect at once (even while paused). */
   const applyVisible = (commands: readonly Command[]): void => {
     for (const c of commands) sim.apply(c);
+    // A demand surge also brings in a visible extra flight (F-2).
+    if (commands.some((c) => c.type === 'surge')) airport.surge();
     const events = sim.drainEvents();
     timeline.ingest(events);
     alertFeed.ingest(events);
@@ -277,6 +290,13 @@ function start(root: HTMLElement): void {
         saveFlag(storage, LABELS_KEY, on);
         settings.value = { ...settings.value, labels: on };
         data.value = dashboardData();
+      },
+      onPlace: (id: PlaceId) => {
+        const anchor = airportPlan().labels.find((l) => l.id === id);
+        const place = PLACES.find((p) => p.id === id);
+        if (!anchor || !place) return;
+        store.clearSelection();
+        rig.glideTo({ x: anchor.x, z: anchor.z }, place.distance);
       },
       onFacility: (id: FacilityId) => {
         // Fly there without selecting a bay (Q2); clearing the selection also stops any follow.
@@ -416,23 +436,28 @@ function start(root: HTMLElement): void {
 
   // ---------- building labels (I-1, I-4) ----------
 
-  const labelAnchors = new Map<FacilityId, { x: number; y: number; z: number; priority: number }>(
+  const labelAnchors = new Map<string, { x: number; y: number; z: number; priority: number }>(
     FACILITIES.flatMap((f) => {
       const b = hub.buildings.find((x) => x.id === f.building);
       return b ? [[f.id, { x: b.x, y: f.labelY, z: b.z, priority: f.priority }] as const] : [];
     }),
   );
-  let shownLabels: ReadonlySet<FacilityId> = new Set();
+  // Airport places share the overlay, below every hub facility (L-1).
+  for (const l of airportPlan().labels) {
+    const p = PLACES.find((x) => x.id === l.id);
+    if (p) labelAnchors.set(l.id, { x: l.x, y: l.y, z: l.z, priority: p.priority });
+  }
+  let shownLabels: ReadonlySet<string> = new Set();
   /** Positions every label over its building, then hides the lower-priority ones that overlap. */
   const placeLabels = (): void => {
-    const els = overlay.querySelectorAll<HTMLElement>('[data-facility]');
+    const els = overlay.querySelectorAll<HTMLElement>('[data-facility], [data-place]');
     if (els.length === 0) {
       shownLabels = new Set();
       return;
     }
-    const rects: { id: FacilityId; priority: number; x: number; y: number; w: number; h: number; el: HTMLElement }[] = [];
+    const rects: { id: string; priority: number; x: number; y: number; w: number; h: number; el: HTMLElement }[] = [];
     for (const el of els) {
-      const id = el.dataset.facility as FacilityId;
+      const id = el.dataset.facility ?? el.dataset.place ?? '';
       const a = labelAnchors.get(id);
       const p = a ? toScreen(a.x, a.y, a.z) : null;
       if (!a || !p) {
@@ -458,6 +483,8 @@ function start(root: HTMLElement): void {
   // ---------- loop (A3) ----------
 
   let accumulator = createAccumulator(rates.stepWallSec, 5);
+  /** Airport clock (H2): advances with the simulation speed; frozen while paused. */
+  let airportTime = 0;
   /** Speed = steps per tick for both simulations (S-19, W9); the step cap grows with it. */
   function setSpeed(value: Speed): void {
     if (value === speed) return;
@@ -544,6 +571,10 @@ function start(root: HTMLElement): void {
         return p ? [{ x: p.x, z: p.z, kind: a.kind }] : [];
       }),
     });
+    // Visual-only clock: real frame time (capped at 1 s, like the camera) so flights keep pace even
+    // when frames are slow; the speed multiplier still pauses and fast-forwards it (H2).
+    airportTime += Math.min(1, rawDt) * speed;
+    airport.update({ time: airportTime, night: environment.nightFactor, tier: qualityTier, reducedMotion, lampLevel: world.lampsLit() });
     placeLabels();
     sky.group.position.set(camera.position.x, 0, camera.position.z);
     sky.update(skyColours(environment, weatherMode), q.clouds, reducedMotion ? 0 : dt);
@@ -618,6 +649,15 @@ function start(root: HTMLElement): void {
           return { id: s.id, text: el?.textContent ?? '', state: s.state, visible: shownLabels.has(s.id) };
         });
       },
+      placeLabels: () =>
+        settings.value.labels
+          ? PLACES.map((p) => {
+              const el = overlay.querySelector<HTMLElement>(`[data-place="${p.id}"]`);
+              return { id: p.id, text: el?.textContent ?? '', visible: shownLabels.has(p.id) };
+            })
+          : [],
+      aircraft: () => airport.aircraft().map((a) => ({ id: a.id, phase: a.phase, x: a.x, y: a.y, z: a.z, gate: a.gate })),
+      airportTime: () => airportTime,
       boomOpen: (id) => site.boomOpen(id),
       patrolPose: () => site.patrolPose(),
     };

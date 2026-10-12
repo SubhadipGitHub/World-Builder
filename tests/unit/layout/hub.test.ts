@@ -160,8 +160,8 @@ describe('hub layout: nothing parks inside a conflict zone (box rule feasibility
 });
 
 describe('hub layout: scene metadata', () => {
-  it('defines the five camera areas (I-5)', () => {
-    expect(hub.areas.map((a) => a.id)).toEqual(['overview', 'return', 'wash', 'energy', 'lot']);
+  it('defines the five hub camera areas (I-5), then the Airport area (M6, L-2)', () => {
+    expect(hub.areas.map((a) => a.id)).toEqual(['overview', 'return', 'wash', 'energy', 'lot', 'airport']);
   });
 
   it('defines footprints for every building and zone (W-2)', () => {

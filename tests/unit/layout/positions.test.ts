@@ -50,9 +50,9 @@ describe('hubBounds', () => {
     expect(loose.maxZ).toBeCloseTo(tight.maxZ + 20);
   });
 
-  it('contains every camera area', () => {
+  it('contains every hub camera area (the Airport area lies in the airport, M6 L-2)', () => {
     const b = hubBounds(0);
-    for (const a of hub.areas) {
+    for (const a of hub.areas.filter((x) => x.id !== 'airport')) {
       expect(a.x).toBeGreaterThan(b.minX);
       expect(a.x).toBeLessThan(b.maxX);
       expect(a.z).toBeGreaterThan(b.minZ);

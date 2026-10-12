@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { gzipSync } from 'node:zlib';
+import { MAX_DISTANCE } from '../../src/app/limits';
 import { expect, test, type Page } from '@playwright/test';
 
 // M1 blocks 1–3 end to end, against the built single file over file:// (N-1).
@@ -151,7 +152,8 @@ test('wheel zooms and right-drag rotates, within limits (I-1)', async ({ page })
   for (let i = 0; i < 20; i++) await page.mouse.wheel(0, 5_000);
   const far = await page.evaluate(() => window.__hub!.cameraDistance());
   expect(Number.isFinite(far)).toBe(true);
-  expect(far).toBeLessThanOrEqual(600);
+  // The airport widened the zoom-out limit to 1,100 m (M6, L-2).
+  expect(far).toBeLessThanOrEqual(MAX_DISTANCE);
   // Left-drag pans the target.
   const t0 = await page.evaluate(() => window.__hub!.cameraTarget());
   await page.mouse.down();

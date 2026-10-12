@@ -17,8 +17,8 @@ export default tseslint.config(
     },
   },
   {
-    // Architecture A9 / N-4: the simulation is pure and deterministic.
-    files: ['src/sim/**/*.ts'],
+    // Architecture A9 / N-4: the simulation is pure and deterministic. The airport (M6, H1) follows the same rules.
+    files: ['src/sim/**/*.ts', 'src/airport/**/*.ts'],
     rules: {
       'no-restricted-imports': ['error', { patterns: [{ group: ['three', 'three/*', 'preact', 'preact/*'], message: 'src/sim must not depend on rendering or UI (N-4).' }] }],
       'no-restricted-properties': ['error', { object: 'Math', property: 'random', message: 'Use the seeded Rng from sim/rng (A9).' }],

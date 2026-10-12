@@ -60,8 +60,9 @@ const POOL_RADIUS: Readonly<Record<LampPlacement['kind'], number>> = { street: 8
 const POOL_PEAK = 0.24;
 
 /** Roadside lighting (V-6): poles, lenses and light pools for every placement, switched with a stagger. */
-export function createLampsView(): LampsView {
-  const lamps = lampPlacements();
+/** `extra`: placements beyond the hub's own, e.g. the airport apron masts (M6, H8). */
+export function createLampsView(extra: readonly LampPlacement[] = []): LampsView {
+  const lamps = [...lampPlacements(), ...extra];
   const group = new Group();
   const poleMat = new MeshStandardMaterial({ vertexColors: true, roughness: 0.55, metalness: 0.25 });
   const headMat = new MeshBasicMaterial({ toneMapped: false });

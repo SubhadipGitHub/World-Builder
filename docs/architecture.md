@@ -650,7 +650,7 @@ src/app/main.ts             baseline sim, speed, routing of commands, hooks
 - **Production bundle:** 202.3 KB gzipped (budget 600 KB), with no test hooks.
 - **Screenshots for review:** the drawer with the Wash tunnel down preset, top-bar chips and speed, KPI "≈ normal" delta lines, Wash bay 1 offline with its badge, cones and "Bring online", and the phone bottom sheet.
 
-## 18. M5: branding, building indicators and hub security (design approved 2026-10-12; implemented, awaiting review)
+## 18. M5: branding, building indicators and hub security (design approved 2026-10-12; implemented)
 
 Implements requirements §10 (B-1…B-4, I-1…I-4, SEC-1…SEC-4, ENV-1, D17–D21). Render and UI only, plus one read-only snapshot field (`counterQueue`). There are no simulation behaviour changes, no asset files, and it is still one offline file.
 
@@ -809,3 +809,152 @@ src/app/main.ts            site view, labels, hooks
 | Tier 2 | 48 | 62 | 150 |
 
 - **Screenshots for review:** overview labels (compact), the return canopy with its full label, the entrance (pylon, flags, booth with boom, barriers, RETURN, gantry, fence) by day and night, and night overview signs.
+
+## 19. M6: airport context (design approved 2026-10-12; implemented, awaiting review)
+
+Implements requirements §11 (A-1…A-6, F-1…F-5, L-1, L-2, D22–D25). The simulation is untouched. The airport is a pure plan plus pure motion schedules, rendered by one new view.
+
+### 19.1 Key decisions
+| # | Decision | Why |
+|---|---|---|
+| H1 | **A new pure folder, `src/airport/`** (no three, no DOM, same rules as `src/sim`): <ul><li>`plan.ts`: the static layout</li><li>`flights.ts`: the flight schedule</li><li>`traffic.ts`: background and airport vehicles</li><li>`paths.ts`: polyline and keyframe maths</li></ul> | Deterministic and testable without WebGL. Kept apart from the simulation, so the hub's calibrated behaviour can't change (D20). |
+| H2 | **An airport clock.** `main` advances `airportTime += dt × speed` (speed 0–3, M4), so pause freezes jets and traffic together with the hub, and 60× speeds them up. Every airport pose is a pure function of `airportTime`. | Consistent with the hub's pause and speed control, and reproducible in tests. |
+| H3 | **Flights as a timeline of movements.** <ul><li>Cycle P = 80 s: an arrival at k·P and a departure at k·P + 40.</li><li>Each movement is a keyframed 3D path (`Keyframe { t, x, y, z }`) built once from the plan: approach (3° glide), flare, roll-out, rapid exit, apron taxi lane, gate; or pushback, taxiway east, line-up, roll west, rotate, climb.</li><li>`movementsAt(t)` returns active aircraft poses (position, heading, pitch, gear, lights, phase).</li></ul> | Simple, exact separation by construction: one runway direction (27), departures on the taxiway (eastbound), arrivals on the apron lane (westbound), and runway occupancy windows that never overlap. |
+| H4 | **Gate assignment is a deterministic replay:** the starting occupancy is 6 of 8 gates (A1–A6), arrivals take the lowest free gate, and departures leave from the gate occupied longest. `gateStateAt(t)` replays the cycles up to t (cached per cycle). | Gate use is always consistent, and testable. |
+| H5 | **Extra arrival (F-2):** `scheduleExtra(t)` picks the first approach start in [t, t + 5] whose runway window is free. If there is none, it uses a holding variant (an extended approach) that lands in the next free window. If every gate is full, the jet parks at the remote stand by the cargo apron. | Meets "within 5 s" without breaking runway exclusivity or gate consistency. |
+| H6 | **Background traffic** moves along closed loops at constant speed and fixed spacing (`pose = path(s0 + v·t mod L)`), so it can't overlap by construction. <ul><li>Boulevard: 4 lanes, separate loops per direction.</li><li>Terminal curb: cars, plus a separate bus bay loop with dwell.</li><li>Airport vehicles: the tug is attached to the departing jet's nose during pushback, then returns. The fuel truck and follow-me car run on their own service-road loops.</li></ul> | Cheap and safe. Nothing touches the hub simulation. |
+| H7 | **One shared text atlas.** `main` builds a single atlas holding the M5 site strings and the M6 airport strings, and passes it to both views. | One texture and no duplicate glyph work. The M5 sign code is unchanged. |
+| H8 | **Airport floodlight masts go through `lampsView`:** `createLampsView(extra)` takes extra placements (8 apron masts, kind `'mast'`), so they switch with the street lights. Airfield lights (runway edge, threshold, taxiway) are one instanced `MeshBasic` mesh with per-instance colour, scaled by the same lamp level. | Night lighting stays consistent (V-6) for 1 draw call. |
+| H9 | **Jets are instanced per part** (capacity 12): body (white fuselage and wings), livery (tail and cheatline, tinted per airline by instance colour), windows (dark band; scaled to zero on the freighter), and nav and beacon lights (`MeshBasic`, flashing by material). Gear is a separate small instanced mesh, scaled by `gear`. | About 5 draw calls for every aircraft. One geometry stays within its 2.5k-triangle budget. |
+| H10 | **Static airport geometry is merged by material,** as in M5 G4: `airportStatic` (buildings, bridges' fixed parts, tower, garage, hotel, cargo, fuel farm, fire station and engine, boulevard deck and piers, fences, sign boards), `airportGlass`, `airportGlow` (windows and signs at night), `pavement` (runway, taxiway and apron surfaces) and `markings`. Jet bridge tunnels and cabs are instanced and animated. | Few draw calls for a large area. |
+| H11 | **Labels:** `ui/places.ts` defines `PLACES` (airport name labels, with priority below every hub facility). `FacilityLabels` also renders place labels (no status dot) through the same overlay, declutter and blockers. Hooks: the existing `facilityLabels()` keeps returning hub facilities only (M5 tests unchanged), and a new `placeLabels()` returns the airport ones. | One label system; the M5 contract is preserved. |
+| H12 | **Camera and area:** `AreaId` gains `'airport'` (x 0, z 380, distance 700). The camera limits become the union of the hub bounds and the airport plan bounds, with `maxDistance` 1100. Hub areas are unchanged. | L-2. |
+| H13 | **Detail by tier:** the pure `airportDetail(tier, reducedMotion)` returns `{ flights, traffic: 1 \| 0.5 \| 0, vehicles, lightAnim }`. Reduced motion stops beacon rotation and strobes but keeps flights (§11.7). | D21 in one tested place. |
+
+### 19.2 Contracts
+```ts
+// airport/paths.ts
+interface Keyframe { t: number; x: number; y: number; z: number }
+sampleKeyframes(keys, t) → { x, y, z, heading, pitch }        // clamped; heading from motion
+polylineLength(pts); pointAtDistance(pts, s, closed) → { x, z, heading }
+
+// airport/plan.ts
+interface AirportPlan {
+  bounds: Bounds2D;                                           // whole airport, for camera limits
+  airsideFence: { z: number; fromX: number; toX: number; gate: Pose };
+  terminal: Box; curb: { z: number; fromX: number; toX: number };
+  gates: readonly { id: 'A1' | … | 'A8'; stand: Pose; bridgeRoot: Vec2 }[];   // stand: jet nose-in pose
+  runway: { z: number; fromX: number; toX: number; width: number };
+  taxiway: { z: number; fromX: number; toX: number }; apronLane: { z: number };
+  rapidExit: readonly Vec2[]; buildings: readonly Box[];      // tower, fire, fuel, cargo, garage, hotel, cellLot
+  boulevard: { x: number; fromZ: number; toZ: number; deckY: number; width: number };
+  overpasses: readonly { z: number; clearance: number }[];    // over the hub road extensions
+  remoteStand: Pose; masts: readonly LampPlacement[];
+  airfieldLights: readonly { x: number; z: number; colour: 'white' | 'green' | 'red' | 'blue' }[];
+  gantries: readonly Gantry[]; labels: readonly PlaceAnchor[];
+}
+airportPlan(): AirportPlan                                     // cached, deterministic
+
+// airport/flights.ts
+type Airline = 'pacificGateway' | 'coastline' | 'sunlineCargo';
+interface AircraftPose { id: string; airline: Airline; x; y; z; heading; pitch; gear: number; phase: 'approach' | 'landing' | 'taxiIn' | 'parked' | 'pushback' | 'taxiOut' | 'takeoff' | 'climb'; gate: string | null; landingLights: boolean }
+createFlightSchedule(): { aircraftAt(t): readonly AircraftPose[]; gatesAt(t): ReadonlyMap<string, string | null>; scheduleExtra(t): number /* approach start */ }
+export const CYCLE_SEC = 80; RUNWAY_SEPARATION etc.
+
+// airport/traffic.ts
+trafficAt(t, density: 1 | 0.5 | 0) → readonly { id; kind: 'car' | 'taxi' | 'bus'; x; y; z; heading }[]
+serviceVehiclesAt(t, aircraft) → readonly { id; kind: 'tug' | 'fuel' | 'followMe'; x; z; heading }[]
+airportDetail(tier, reducedMotion) → { flights; traffic: 1 | 0.5 | 0; vehicles; lightAnim }
+
+// render/airport/*: aircraft.ts (jet geometry and parts), buildings.ts, view.ts →
+//   AirportView { group; update({ time, night, tier, reducedMotion, lampLevel }); aircraft(): readonly AircraftPose[] }
+// ui/places.ts: PLACES; FacilityLabels gains `places` (name-only).
+// app/testHooks: placeLabels(), aircraft(), airportTime()
+```
+
+### 19.3 Performance plan
+| Group | Draw calls (tier 0) |
+|---|---|
+| Pavement, markings | 2 |
+| Static buildings, glass, glow | 3 |
+| Jet bridges (tunnels, cabs) | 2 |
+| Jets (body, livery, windows, lights, gear) | 5 |
+| Airfield lights, tower beacon | 2 |
+| Traffic (cars: paint, trim, lamps; buses: paint, trim, lamps) | 6 |
+| Airport vehicles (tug, fuel truck, follow-me), palms | 4 |
+| Shadow casters | about 12 |
+| **Total added** | **about 36** (budget 60) |
+
+- **Totals:** tier 0 at night with rain goes from about 114 to about 150 (limit 300). Tier 2 goes from 62 to about 85 (limit 150), with no traffic or vehicles.
+- **Triangles:** jets about 30k, traffic about 28 cars × 1.9k + 4 buses = about 60k, buildings about 60k. About 150k in total (budget 250k).
+- **Software WebGL (E2E):** traffic counts stay modest, and the E2E draw-call tests run at the Airport area, so the heaviest view is measured.
+
+### 19.4 Test plan (Stage 3 preview)
+| Layer | What's tested |
+|---|---|
+| Unit: `airport/paths` | Keyframe sampling (clamping, interpolation, heading and pitch); polyline length and point at a distance, open and closed |
+| Unit: `airport/plan` | <ul><li>Deterministic.</li><li>No building, pavement or light inside the hub fence, on the patrol loop, or within 6 m of a road extension; the overpasses span the extensions with ≥ 5.5 m clearance.</li><li>The runway (1,200 × 45 m) and all airport bounds lie inside the ground.</li><li>8 gates with stands ≥ 45 m apart, and jets at stands clear of the terminal and of each other.</li><li>Buildings don't overlap.</li><li>The airside fence runs between the patrol loop and the terminal.</li><li>Airfield lights line both runway edges and the taxiway.</li><li>Every L-1 label has an anchor.</li></ul> |
+| Unit: `airport/flights` | <ul><li>Deterministic, with one movement about every 40 s.</li><li>Runway occupancy never overlaps.</li><li>Moving and parked aircraft stay ≥ 50 m apart (sampled every 0.25 s over 10 cycles).</li><li>Gate occupancy is consistent: at most one jet per gate, an arrival docks at a free gate, a departure frees its gate, 6–7 gates are occupied.</li><li>The approach follows a 3° glide (±10%); gear is down below 60 m; climb-out leaves view; ground speeds stay within limits.</li><li>Poses are continuous.</li><li>`scheduleExtra` starts the approach within 5 s and keeps every rule above; with all gates full it uses the remote stand.</li></ul> |
+| Unit: `airport/traffic` | <ul><li>Vehicles in a lane stay at their spacing.</li><li>Buses dwell at the curb.</li><li>Density 0.5 halves the count and 0 empties it.</li><li>The tug is at the nose during pushback.</li><li>Service loops stay on their own roads.</li><li>`airportDetail` returns the right detail per tier and with reduced motion.</li></ul> |
+| Unit: UI | `PLACES` priorities are below every hub facility; `FacilityLabels` renders place labels without a status, clickable; `AreaSwitcher` shows "Airport"; the camera limits include the airport bounds. |
+| E2E | <ul><li>The "Airport" area flies the camera there.</li><li>Airport labels show and clicking one flies there.</li><li>A landing and a take-off are seen (via the `aircraft()` hook, at 60×).</li><li>A surge brings an approach within 5 s of airport time.</li><li>Pause freezes `airportTime`.</li><li>Draw calls at the Airport area at night in rain: ≤ 300 on tier 0, ≤ 150 on tier 2.</li><li>No errors; bundle ≤ 600 KB; the M1–M5 suites stay green.</li></ul> |
+| Visual review | Screenshots: the airport by day and night, a landing, a jet docked at a gate, the boulevard overpass, and the hub with the airport behind it. |
+
+### 19.5 Risks
+| Risk | Mitigation |
+|---|---|
+| Software-WebGL E2E slows down with a bigger scene | Modest traffic counts and instancing; tier 2 has no traffic; poll timeouts as in M3/M4 |
+| Aircraft look wrong (scale, pitch, gear) | Keyframe tests (glide slope, gear height); screenshot review of a landing |
+| Planes or traffic cross the hub or each other | Pure clearance and separation tests (H3, H6); nothing shares a path with the simulation |
+| Labels clutter the wide airport view | Places have the lowest priority, compact mode, declutter and blockers (M5) |
+| Bundle and triangle growth | Procedural low-poly kit; budgets asserted (§11.7) |
+
+### 19.6 Stage 3 status (2026-10-12)
+- **Contracts (stubbed):**
+  - `src/airport/paths`, `plan`, `flights`, `traffic` (types, constants, stubs); the ESLint purity rules now also cover `src/airport` (H1)
+  - `ui/places` (`PLACES` is real config)
+  - `FacilityLabels` gains `places` / `onPlace`
+  - `app/limits` (`cameraLimits`, `MAX_DISTANCE`)
+  - test hooks `placeLabels`, `aircraft`, `airportTime`
+- **Failing tests:**
+  - **Unit:** paths (5); plan, flights and traffic (fail at load, because they call stubs at module scope); camera limits; the Airport area; place labels.
+  - **E2E:** `tests/e2e/m6.spec.ts` (5).
+- **Existing suites:** all 474 other unit tests pass (`places.test.ts` passes already, as it checks config).
+- **Fixed by the tests:** the separation rule is ≥ max(45 m, wingspan + 6 m) between any two aircraft, including parked neighbours. So gate stands are ≥ 45 m apart and the apron lane runs ≥ 45 m beyond the stands.
+
+### 19.7 Implementation notes (Stage 4, 2026-10-12)
+- **Flight timeline as built (H3 refined):**
+  - Arrivals roll west and leave by a **west-end exit** (x ≈ −200), west of every gate, then taxi east on the apron lane. Departures taxi only east of their gate on the taxiway. So the two flows never share ground.
+  - Runway windows per 80 s cycle: arrival [0, 20.5], departure about [44, 70]. A surge extra touches down at c + 21.5 (one per cycle); its approach starts immediately (F-2), and a longer approach covers the wait.
+  - Departures start at k = 1, so the 6 initial gates are all held at t = 0.
+  - Two remote stands (x −330 and −380) sit beside the cargo freighter. An extra with every stand taken diverts (it isn't added).
+  - Every rule is unit-tested at 0.25 s over 10 cycles.
+- **Plan details:**
+  - The apron lane extends to x −400 (the remote stands).
+  - The overpasses are derived from the M5 road extensions.
+  - The boulevard deck is level to z 200, then ramps to the curb.
+- **Airport clock (H2 refined):** advances by the real frame time (capped at 1 s, as for the camera in M3) times the speed (0–3). Pause still freezes it, and flights keep pace even when software WebGL drops frames.
+- **Shared atlas (H7):** `createSiteView(palette, atlas)` and `createAirportView(palette, atlas)` take one atlas, built in `main` from `signEntries` and `airportTexts`. `site.ts` exports `at`, `boardFor`, `gantry` and its colours for reuse.
+- **Lamps:** `createLampsView(extra)` takes the 6 apron masts (H8).
+- **Labels:** `declutter` is generic over label ids; places sort after facilities on ties.
+- **Fixed during the screenshot review:** terminal and garage roofs are now a light membrane grey (graphite read as a black slab from above).
+- **Tests updated for the approved L-2:**
+  - The M1 area list now ends with `'airport'`.
+  - The "contains every camera area" test covers the hub areas (the airport area lies in the airport).
+  - The M1 zoom test checks `MAX_DISTANCE` (1,100) instead of 600.
+  - The M6 flight E2E tests pin tier 0 (tier 2 parks jets by design, and software WebGL drops there); the jets test allows 150 s.
+
+### 19.8 Verified results (2026-10-12)
+- **Checks:** typecheck and lint are clean. 516 unit tests, 16 soak runs and 38 E2E tests (M1–M6 and the dev server) pass.
+- **Production bundle:** 220.9 KB gzipped (budget 600 KB), with no test hooks.
+- **Draw calls at 1280 × 800, tier 0:**
+
+| View | Draw calls | Limit |
+|---|---|---|
+| Hub overview by day, airport in view | 129 | — |
+| Airport area by day | 125 | — |
+| Airport area at night in rain | 142 | 300 |
+| Airport area on tier 2 | 76 | 150 |
+
+- **Jet model:** 1,224 triangles (budget 2,500).
+- **Screenshots for review:** the airport with labels and a landing, the terminal close-up (bridges, gate numbers, liveries), the hub with the airport, and the airport at night (runway, taxiway and apron lights).

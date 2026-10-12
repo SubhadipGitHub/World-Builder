@@ -85,8 +85,8 @@ export function labelName(status: FacilityStatus): string {
   return `${status.name}, ${STATE_LABEL[status.state]}, ${words}`;
 }
 
-export interface LabelRect {
-  readonly id: FacilityId;
+export interface LabelRect<T extends string = FacilityId> {
+  readonly id: T;
   readonly priority: number;
   /** Screen rect in CSS pixels. */
   readonly x: number;
@@ -106,11 +106,15 @@ export interface ScreenRect {
  * Ids to show: higher priority first (ties by FACILITIES order); a label overlapping a shown one,
  * or any blocker (a dashboard panel), hides.
  */
-export function declutter(rects: readonly LabelRect[], blockers: readonly ScreenRect[] = []): ReadonlySet<FacilityId> {
-  const order = (id: FacilityId): number => FACILITIES.findIndex((f) => f.id === id);
+export function declutter<T extends string = FacilityId>(rects: readonly LabelRect<T>[], blockers: readonly ScreenRect[] = []): ReadonlySet<T> {
+  // Facilities keep their FACILITIES order on ties; other labels (airport places) come after.
+  const order = (id: string): number => {
+    const i = FACILITIES.findIndex((f) => f.id === id);
+    return i < 0 ? FACILITIES.length : i;
+  };
   const sorted = [...rects].sort((a, b) => b.priority - a.priority || order(a.id) - order(b.id));
   const overlaps = (a: ScreenRect, b: ScreenRect): boolean => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
-  const shown: LabelRect[] = [];
+  const shown: LabelRect<T>[] = [];
   for (const r of sorted) {
     if (!blockers.some((b) => overlaps(r, b)) && !shown.some((s) => overlaps(r, s))) shown.push(r);
   }

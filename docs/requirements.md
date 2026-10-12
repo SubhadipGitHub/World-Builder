@@ -29,6 +29,7 @@
 | D19 | M6 layout (2026-10-12) | **Airside to the north** of the hub, landside to the west and south. The map grows about 2×, and an "Airport" area is added. |
 | D20 | M6 flights (2026-10-12) | **Visual only**, on a deterministic schedule; the simulation is unchanged. |
 | D21 | M5/M6 performance (2026-10-12) | **Detail scales by quality tier.** The ≤ 300 / ≤ 150 draw-call budgets stay. |
+| D22–D25 | M6 airport (2026-10-12) | Mid-size airport, a movement about every 40 s, name labels, three fictional airlines (§11.1). |
 
 > Note on D2: the pack loads Three.js "from a CDN". We bundle it inline instead. The result is still one HTML file and it works offline.
 
@@ -420,17 +421,107 @@ Goal: the hub reads as a real, branded rental car center at an airport. Signs na
 - **Q4 Labels switch.** **In the user menu, on by default**, remembered per browser.
 - **Q5 Sign texts.** **As in B-1.**
 
-## 11. M6: Airport context (OUTLINE 2026-10-12; detailed after M5)
+## 11. M6: Airport context (APPROVED 2026-10-12; implemented)
 
-Decided now (D18–D21); the full spec, design and tests come after M5 is reviewed.
-- **Layout (D19):** airside to the north, beyond the Ready lot and gates (z > 200), with landside to the west and south. The map grows about 2×. Camera limits widen, and an **"Airport"** area joins the area switcher.
-- **Contents:**
-  - a passenger terminal with jet bridges, and a departures/arrivals curb road
-  - an air-traffic control tower with a rotating beacon
-  - a runway and taxiway, and parked jets at gates in fictional liveries (e.g. "Pacific Gateway Air", "Coastline")
-  - planes that land and take off on a fixed, deterministic schedule
-  - a multi-storey parking garage, an airport hotel, a cell-phone lot, a fuel farm and a cargo warehouse
-  - an elevated airport boulevard and overpass with palm-lined medians and background traffic
-  - an airside security fence, and an airport fire station with a red engine
-- **Flights are visual only (D20):** the simulation is unchanged. The "Flight bank lands" what-if also triggers a visible landing.
-- **Tiers (D21):** detail scales by tier, as in §10.4.
+Goal: the rental hub sits inside a believable, living **Pacific Gateway International Airport** (fictional). There is a terminal with jet bridges, a control tower, a runway with jets landing and taking off, landside garages and a hotel, and an elevated boulevard with traffic. All of it is procedural (W-1), fictional (N-7) and in one offline file (N-1). The simulation is unchanged: flights and background traffic are visual only (D20).
+
+### 11.1 Decisions
+| # | Decision | Choice |
+|---|---|---|
+| D22 | Airport scale (2026-10-12) | **Mid-size:** one terminal with 8 gates (A1–A8) and jet bridges, one runway of about 1.2 km plus a parallel taxiway, and 6 parked jets |
+| D23 | Flight cadence (2026-10-12) | **One movement about every 40 real seconds,** alternating landing and take-off, plus a jet taxiing between the runway and a gate |
+| D24 | Airport labels (2026-10-12) | **Name-only labels** for airport buildings, sharing the hub labels' switch, declutter and fly-to |
+| D25 | Airlines (2026-10-12) | **Pacific Gateway Air** (navy and gold), **Coastline** (teal and white) and **Sunline Cargo** (orange, freighter). All fictional. |
+
+### 11.2 Layout (D19)
+| Zone | Where (metres; hub fence x −249…195, z −134…207) |
+|---|---|
+| Airside fence | Along z ≈ 235 from the west to the east edge of the ground, with a guarded airside gate (booth and boom, reusing M5's) near the cargo area |
+| Terminal and curb road | Terminal along x −150…150 at z ≈ 290 (300 × 40 m, 3 levels, about 18 m tall). Departures and arrivals curb road on its south side (z ≈ 262), joined to the boulevard |
+| Gates and apron | 8 jet bridges on the north side at z ≈ 312; a concrete apron over z 315…400, x −210…220; gate stands at z ≈ 345 |
+| Taxiway | Parallel at z ≈ 430, x −560…560, with links to the apron |
+| Runway 09/27 | z ≈ 482, x −600…600, 45 m wide: threshold markings, a centre line, designators "09" and "27", touchdown zones |
+| Control tower | x ≈ 260, z ≈ 330, about 60 m tall, with a glazed cab and a rotating beacon |
+| Fire station | x ≈ 340, z ≈ 380 (airside, by the runway), with a red airport fire engine on its apron |
+| Fuel farm | x ≈ 440, z ≈ 300: 4 white tanks behind a bund wall |
+| Cargo | x ≈ −430, z ≈ 330: a warehouse with a Sunline Cargo freighter on its stand |
+| Airport Blvd | Elevated (about 8 m) dual carriageway running north–south at x ≈ −420, from z −470 to the terminal curb. It passes over the hub's road extensions (M5) on an overpass, with palm-lined medians |
+| Parking garage | x ≈ −330, z ≈ 60: 5 levels, 70 × 90 m, lit decks at night, a "P" sign |
+| Airport hotel | x ≈ −340, z ≈ −260: a 40 m tower with lit windows and a rooftop "Gateway Hotel" sign |
+| Cell-phone waiting lot | x ≈ −60, z ≈ −250: marked stalls, a shelter and a sign |
+
+Nothing is placed inside the hub fence, on the patrol loop (M5), or within 6 m of a hub road extension, except the overpass, which spans the extensions with at least 5.5 m clearance.
+
+### 11.3 Buildings and details
+- **A-1 Terminal.**
+  - A glass curtain wall, a gold "Pacific Gateway International" roof sign facing the hub, and a departures/arrivals canopy over the curb.
+  - Gate numbers A1–A8 on the jet bridges.
+  - Windows glow at night.
+- **A-2 Jet bridges.** 8 telescoping bridges, each with a rotunda and a cab, docked to parked jets; the bridge for the taxiing jet's gate retracts and extends.
+- **A-3 Control tower.** A tapered shaft and a glass cab with a gold band. The beacon alternates green and white and rotates (steady with reduced motion).
+- **A-4 Landside buildings.**
+  - Parking garage: open decks with parked-car silhouettes, and ramps.
+  - Hotel: a tower and podium.
+  - Cell-phone lot: stalls and a shelter.
+  - Cargo warehouse: roller doors and a loading apron.
+  - Fuel farm: tanks, pipes and a bund.
+  - Fire station: 3 bays and a hose tower.
+  - All in the Pixar kit style (V-1).
+- **A-5 Ground markings and lights.**
+  - Runway edge lights (white), threshold lights (green and red), taxiway edge lights (blue) and apron floodlight masts (the lamp `'flood'` kind, V-6).
+  - All lit at night, switching on with the street lights.
+- **A-6 Wayfinding (B-3 style).**
+  - Boulevard gantries: "Terminal A · Departures / Arrivals", "Rental Car Return → GoldLane" (at the hub exit ramp) and "Parking · Hotel · Cell Phone Lot".
+  - Airside signs: "Fire Station" and "Cargo".
+
+### 11.4 Life
+- **F-1 Flights (D23).** A deterministic schedule (pure, tested):
+  - **Arrival:** final approach from the east on a 3° glide path, flare, touchdown, roll-out, exit onto the taxiway, taxi to a free gate. The jet bridge extends, and the jet stays parked.
+  - **Departure:** the bridge retracts, pushback, taxi to the runway's east end, take-off roll west, rotate and climb out to the west until out of view.
+  - Movements alternate about every 40 s. At most 2 jets move at once, and they never overlap: runway occupancy is exclusive, and taxi paths are separated by time.
+  - Gate use is consistent: an arrival takes a free gate, a departure frees one, and 6 of 8 gates are occupied on average.
+- **F-2 "Flight bank lands" (M4).** Starting a surge also schedules an extra arrival within 5 s.
+- **F-3 Aircraft.**
+  - Procedural jets about 38 m long: fuselage, swept wings with engines, tail fin in airline colours, cockpit windows and a passenger window band (none on the freighter).
+  - Navigation lights (red left, green right, white tail), flashing beacons and landing lights at night.
+  - Gear is down when on the ground or below 60 m.
+- **F-4 Background traffic.**
+  - Visual-only cars, taxis and airport buses loop the boulevard and the terminal curb, with headlights and taillights at night. They are not simulation agents and are separated by fixed spacing on their own paths.
+  - Buses stop briefly at the curb.
+- **F-5 Airport vehicles.** A pushback tug for each departure, a fuel truck between the fuel farm and the apron, and a follow-me car. All visual only, on fixed paths.
+
+### 11.5 Labels and camera
+- **L-1 Airport labels (D24).**
+  - Name-only labels on the same overlay and switch as the hub labels (I-1, I-4): "Terminal A · Gates A1–A8", "Control Tower", "Runway 09/27", "Parking Garage", "Gateway Hotel", "Cell Phone Lot", "Sunline Cargo", "Fire Station" and "Fuel Farm".
+  - Lower priority than the hub labels. No status dot, because flights are visual only.
+  - Clicking one flies the camera there.
+- **L-2 Airport area.**
+  - The area switcher gains "Airport", centred on the terminal and apron, about 700 m out.
+  - The camera can zoom out to about 1,100 m, and its pan limits grow to the airport.
+  - Hub areas and their framings are unchanged.
+
+### 11.6 Quality tiers (D21)
+| Tier | Shown |
+|---|---|
+| 0 | Everything |
+| 1 | Background traffic halved; airport vehicles off |
+| 2 | Buildings, markings, parked jets, signs and labels. Aircraft are parked only (no movements), with no traffic, airport vehicles or runway and taxiway light animation; lights are static. |
+
+### 11.7 Budgets and non-functional
+- **Draw calls:** M6 adds at most 60 at tier 0. The limits stay: ≤ 300 at tier 0 at night in rain, and ≤ 150 at tier 2. Jets are instanced per part (body, livery, glass, lights), and lights are instanced.
+- **Triangles:** M6 adds at most about 250k at tier 0 (jets: 2.5k each).
+- **Bundle:** ≤ 600 KB gzipped (currently 211 KB).
+- **Accessibility (N-5):** reduced motion stills the beacons and strobes, but aircraft still land and take off, as cars still drive.
+- **Unchanged:** N-1, N-7, all hub behaviour, and every M1–M5 requirement and test.
+
+### 11.8 User stories
+- As a **viewer**, I click "Airport" and the camera pulls back over the terminal: a Coastline jet touches down on runway 09/27, taxis to gate A4 and docks with its jet bridge, while a Pacific Gateway Air jet pushes back from A2.
+- As a **viewer at night**, runway and taxiway lights, the tower beacon and the boulevard's headlight streams frame the glowing GoldLane hub.
+- As an **ops manager**, triggering "Friday evening rush" lands a flight within seconds, and I watch its passengers' rental returns swell the hub.
+- As a **viewer** on a weak device, the lowest tier keeps the airport's look (buildings, parked jets, labels) at a draw-call cost the device can handle.
+
+### 11.9 Resolved (approved 2026-10-12: all proposed defaults accepted)
+- **Q1 Runway direction:** **east–west (09/27)**, landing from the east and departing to the west.
+- **Q2 Airside gate:** **a guarded airside gate near the cargo area** (reusing M5's booth and boom).
+- **Q3 Garage location:** **west of the hub, between its fence and the boulevard** (x ≈ −330).
+- **Q4 Flight-bank tie-in (F-2):** **yes**, an extra visible arrival when a surge starts.

@@ -22,6 +22,7 @@ import { assemble, paint, place } from './kit/assemble';
 import { cylinder, roundedBox } from './kit/shapes';
 import { buildLandscape } from './landscape';
 import { createLampsView } from './lampsView';
+import { airportPlan } from '../airport/plan';
 import type { Palette } from './palette';
 
 export interface WorldConditions {
@@ -137,7 +138,7 @@ const barrierArm = (): BufferGeometry => {
 export function buildWorld(palette: Palette): WorldHandle {
   const group = new Group();
   const landscape = buildLandscape(palette);
-  const lampsView = createLampsView();
+  const lampsView = createLampsView(airportPlan().masts);
 
   // Buildings: every solid, glass and glow part merged into one mesh each (P1).
   const solids: BufferGeometry[] = [];

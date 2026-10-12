@@ -26,3 +26,14 @@ describe('AreaSwitcher (I-5)', () => {
     expect(onSelect).toHaveBeenCalledWith('lot');
   });
 });
+
+describe('AreaSwitcher: Airport area (L-2)', () => {
+  it('lists the Airport area last, centred on the terminal and apron', () => {
+    const last = hub.areas[hub.areas.length - 1]!;
+    expect(last).toMatchObject({ id: 'airport', label: 'Airport' });
+    expect(last.z).toBeGreaterThan(300);
+    expect(last.distance).toBeGreaterThanOrEqual(600);
+    render(<AreaSwitcher areas={hub.areas} active="overview" onSelect={() => undefined} />);
+    expect(screen.getByRole('button', { name: 'Airport' })).toBeTruthy();
+  });
+});

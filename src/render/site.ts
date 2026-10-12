@@ -24,7 +24,7 @@ import { cylinder, roundedBox, slab } from './kit/shapes';
 import type { Palette } from './palette';
 import { boomTarget, cctvPan, flagWave, patrolPose, siteDetail, type MovingVehicle } from './site/anim';
 import { groundQuads, quadGeometry, signEntries, signQuads, type TextQuad } from './site/signs';
-import { createTextAtlas } from './text/atlas';
+import { createTextAtlas, type TextAtlas } from './text/atlas';
 
 // M5 site view (requirements §10, architecture §18): signs, entrance, perimeter, surveillance,
 // ground details and the security patrol, all built from the pure site plan.
@@ -48,10 +48,10 @@ export interface SiteView {
   patrolPose(): Vec2 | null;
 }
 
-const GOLD = brand.colors.accent;
-const GRAPHITE = '#2B2D35';
-const STEEL = '#8A919C';
-const CONCRETE = '#B8B6AE';
+export const GOLD = brand.colors.accent;
+export const GRAPHITE = '#2B2D35';
+export const STEEL = '#8A919C';
+export const CONCRETE = '#B8B6AE';
 const UP = new Vector3(0, 1, 0);
 const Z_AXIS = new Vector3(0, 0, 1);
 const ONE = new Vector3(1, 1, 1);
@@ -64,10 +64,10 @@ const CCTV_H = 5.2;
 const FLAG_HZ = 30;
 
 /** Places a geometry at a pose (yaw from the heading, three's rotation convention). */
-const at = (g: BufferGeometry, p: { x: number; z: number }, heading: number, y = 0): BufferGeometry => place(g, { x: p.x, y, z: p.z, rotY: -heading });
+export const at = (g: BufferGeometry, p: { x: number; z: number }, heading: number, y = 0): BufferGeometry => place(g, { x: p.x, y, z: p.z, rotY: -heading });
 
 /** A board behind a vertical text quad: graphite face with a gold top edge. */
-function boardFor(q: TextQuad): BufferGeometry[] {
+export function boardFor(q: TextQuad): BufferGeometry[] {
   // right = (nz, 0, −nx) for a face with outward normal (nx, nz): the board sits behind the text.
   const nx = -q.right[2];
   const nz = q.right[0];
@@ -89,7 +89,7 @@ function booth(p: Pose): BufferGeometry[] {
   ];
 }
 
-function gantry(g: { x: number; z: number; heading: number; span: number; clearance: number }): BufferGeometry[] {
+export function gantry(g: { x: number; z: number; heading: number; span: number; clearance: number }): BufferGeometry[] {
   const out: BufferGeometry[] = [];
   const lx = -Math.sin(g.heading);
   const lz = Math.cos(g.heading);
@@ -191,7 +191,7 @@ const FLAG_SEG_U = 8;
 const FLAG_SEG_V = 4;
 
 /** Builds the M5 site. */
-export function createSiteView(palette: Palette): SiteView {
+export function createSiteView(palette: Palette, sharedAtlas?: TextAtlas | null): SiteView {
   const plan = sitePlan();
   const group = new Group();
   group.name = 'site';
@@ -199,7 +199,8 @@ export function createSiteView(palette: Palette): SiteView {
     new MeshStandardMaterial({ vertexColors: true, roughness: 0.7, metalness: 0.1, ...opts });
 
   // ---------- signs (G3) ----------
-  const atlas = createTextAtlas(signEntries(plan));
+  // One atlas for the site and the airport (M6, H7); built here only when none is shared.
+  const atlas = sharedAtlas === undefined ? createTextAtlas(signEntries(plan)) : sharedAtlas;
   const layout = atlas?.layout ?? null;
   const quads = signQuads(plan, layout);
   const boards = assemble(quads.filter((q) => q.up[1] === 1).flatMap(boardFor));

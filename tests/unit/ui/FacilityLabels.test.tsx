@@ -39,3 +39,27 @@ describe('FacilityLabels (I-1, I-4)', () => {
     expect(onSelect).toHaveBeenCalledWith('gates');
   });
 });
+
+describe('FacilityLabels: airport places (L-1)', () => {
+  it('renders name-only place labels that report clicks', () => {
+    const onPlace = vi.fn();
+    render(
+      <FacilityLabels
+        statuses={[]}
+        compact={false}
+        onSelect={vi.fn()}
+        places={[
+          { id: 'tower', name: 'Control Tower' },
+          { id: 'terminalA', name: 'Terminal A · Gates A1–A8' },
+        ]}
+        onPlace={onPlace}
+      />,
+    );
+    const tower = screen.getByRole('button', { name: 'Control Tower' });
+    expect(tower.getAttribute('data-place')).toBe('tower');
+    expect(tower.classList.contains('place-label')).toBe(true);
+    expect(tower.textContent).toBe('Control Tower');
+    fireEvent.click(screen.getByRole('button', { name: 'Terminal A · Gates A1–A8' }));
+    expect(onPlace).toHaveBeenCalledWith('terminalA');
+  });
+});

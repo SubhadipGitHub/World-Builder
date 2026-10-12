@@ -39,7 +39,7 @@ export interface BuildingLayout {
   readonly height: number;
 }
 
-export type AreaId = 'overview' | 'return' | 'wash' | 'energy' | 'lot';
+export type AreaId = 'overview' | 'return' | 'wash' | 'energy' | 'lot' | 'airport';
 
 export interface AreaLayout {
   readonly id: AreaId;
@@ -421,6 +421,8 @@ export const hub: HubLayout = {
     { id: 'wash', label: 'Wash & maintenance', x: 68, z: -74, distance: 170, azimuth: 0 },
     { id: 'energy', label: 'EV charging & fuel', x: 145, z: 38, distance: 150, azimuth: 0 },
     { id: 'lot', label: 'Ready lot & exit gate', x: -5, z: 150, distance: 250, azimuth: 0 },
+    // M6 (L-2): the terminal and apron, from the south.
+    { id: 'airport', label: 'Airport', x: 0, z: 380, distance: 700, azimuth: 0 },
   ],
 };
 
