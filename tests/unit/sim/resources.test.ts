@@ -82,3 +82,57 @@ describe('createResourcePool (architecture §4.4)', () => {
     expect(pool.allocate()).toEqual([{ agentId: 'b', unitId: 'bay1' }]);
   });
 });
+
+describe('ResourcePool outages (S-2, W3)', () => {
+  it('never grants an offline unit and does not count it as free', () => {
+    const pool = createResourcePool(bays(2));
+    pool.setOnline('bay1', false);
+    expect(pool.isOnline('bay1')).toBe(false);
+    expect(pool.isOnline('bay2')).toBe(true);
+    expect(pool.freeCount()).toBe(1);
+    pool.enqueue('a');
+    pool.enqueue('b');
+    expect(pool.allocate()).toEqual([{ agentId: 'a', unitId: 'bay2' }]);
+    expect(pool.waiting()).toEqual(['b']);
+  });
+
+  it('lets the occupant finish, then grants nobody new until back online', () => {
+    const pool = createResourcePool(bays(1).concat([{ id: 'bay2' }]));
+    pool.enqueue('a');
+    pool.allocate();
+    pool.setOnline('bay1', false);
+    expect(pool.occupant('bay1')).toBe('a');
+    pool.enqueue('b');
+    pool.enqueue('c');
+    expect(pool.allocate()).toEqual([{ agentId: 'b', unitId: 'bay2' }]);
+    pool.release('bay1');
+    expect(pool.allocate()).toEqual([]);
+    expect(pool.freeCount()).toBe(0);
+    pool.setOnline('bay1', true);
+    expect(pool.allocate()).toEqual([{ agentId: 'c', unitId: 'bay1' }]);
+  });
+
+  it('keeps FIFO order and tags across outages', () => {
+    const pool = createResourcePool([
+      { id: 'ev-01', tag: 'ev' },
+      { id: 'ev-02', tag: 'ev' },
+      { id: 'suv-01', tag: 'suv' },
+    ]);
+    pool.setOnline('ev-01', false);
+    pool.enqueue('e1', 'ev');
+    pool.enqueue('e2', 'ev');
+    pool.enqueue('s1', 'suv');
+    expect(pool.allocate()).toEqual([
+      { agentId: 'e1', unitId: 'ev-02' },
+      { agentId: 's1', unitId: 'suv-01' },
+    ]);
+    expect(pool.freeCount('ev')).toBe(0);
+  });
+
+  it('throws on an unknown unit', () => {
+    const pool = createResourcePool(bays(1));
+    expect(() => {
+      pool.setOnline('ghost', false);
+    }).toThrow();
+  });
+});

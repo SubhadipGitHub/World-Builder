@@ -10,6 +10,7 @@ import { formatClock } from '../format';
 import { AreaSwitcher } from '../m1/AreaSwitcher';
 import { search, type SearchResult } from '../search';
 import type { Theme } from '../theme';
+import { SpeedControl, type Speed } from '../m4/SpeedControl';
 
 export interface TopBarProps {
   readonly snapshot: Snapshot | null;
@@ -29,6 +30,16 @@ export interface TopBarProps {
   readonly onOpenAlerts: () => void;
   readonly onAlert: (alert: Alert) => void;
   readonly onPick: (result: SearchResult) => void;
+  /** Simulation speed (S-18): 0 = paused, 1–3 = 20× / 40× / 60×. */
+  readonly speed: Speed;
+  readonly onSpeed: (speed: Speed) => void;
+  /** Active-scenario chips (S-7); a click opens the What-if drawer. */
+  readonly chips: readonly string[];
+  /** Opens the What-if drawer (S-6). Button labelled "What-if scenarios". */
+  readonly onOpenWhatIf: () => void;
+  /** Building labels on/off (I-4): role="switch" "Building labels" in the user menu. */
+  readonly labelsOn: boolean;
+  readonly onLabels: (on: boolean) => void;
 }
 
 const DAY_NIGHT: readonly { readonly value: DayNight; readonly label: string }[] = [
@@ -50,6 +61,8 @@ const LISTBOX_ID = 'search-results';
  *  - alerts: button labelled "Alerts, n unread"; opens a list; clicking an item calls onAlert
  *  - time of day: group labelled "Time of day" with Auto / Day / Night buttons (aria-pressed) (X-2)
  *  - user: button labelled "User menu"; its menu holds role="switch" "Light theme" (aria-checked) (X-4)
+ *  - what-if (M4): "What-if scenarios" button, active-scenario chips (a list labelled "Active scenario",
+ *    only while any lever is set) and the simulation speed control
  */
 export function TopBar(props: TopBarProps): JSX.Element {
   const [query, setQuery] = useState('');
@@ -135,6 +148,24 @@ export function TopBar(props: TopBarProps): JSX.Element {
       </div>
 
       <AreaSwitcher areas={props.areas} active={props.activeArea} onSelect={props.onArea} />
+
+      <div class="scenario-bar">
+        <button type="button" class="what-if-button" onClick={props.onOpenWhatIf}>
+          What-if scenarios
+        </button>
+        {props.chips.length > 0 ? (
+          <ul class="scenario-chips" aria-label="Active scenario">
+            {props.chips.map((c) => (
+              <li key={c}>
+                <button type="button" class="chip" onClick={props.onOpenWhatIf}>
+                  {c}
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        <SpeedControl speed={props.speed} onSpeed={props.onSpeed} />
+      </div>
 
       <div class="controls">
         <select

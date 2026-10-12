@@ -14,6 +14,7 @@
   --critical: #ff7a6b;
   --warning: #f2b33d;
   --info: #8fb4ff;
+  --good: #5fd38a;
   --radius: 12px;
   --gutter: 16px;
   --top: 120px;
@@ -34,6 +35,7 @@
   --critical: #b3261e;
   --warning: #7a4d00;
   --info: #2a5bb8;
+  --good: #1d7a3e;
   color-scheme: light;
 }
 
@@ -126,7 +128,7 @@ select {
   grid-template-columns: auto minmax(180px, 320px) 1fr;
   grid-template-areas:
     'brand search controls'
-    'areas areas areas';
+    'areas areas scenario';
   align-items: center;
   gap: 8px 14px;
 }
@@ -650,7 +652,8 @@ select {
     grid-template-areas:
       'brand controls'
       'search search'
-      'areas areas';
+      'areas areas'
+      'scenario scenario';
     padding: 8px 10px;
   }
 
@@ -664,6 +667,16 @@ select {
   }
 
   .area-switcher button {
+    flex: none;
+  }
+
+  .scenario-bar {
+    justify-content: flex-start;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+  }
+
+  .scenario-bar > * {
     flex: none;
   }
 
@@ -730,5 +743,180 @@ select {
   .detail-panel,
   .tracker {
     width: 100%;
+  }
+}
+
+/* ---------- M4: what-if scenarios (§9) ---------- */
+
+.scenario-bar {
+  grid-area: scenario;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.what-if-button,
+.chip,
+.what-if-section button,
+.reset-button,
+.unit-control button {
+  font-size: 12px;
+  background: transparent;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
+.what-if-button {
+  border-color: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.scenario-chips,
+.outage-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chip {
+  border-radius: 999px;
+  background: var(--row-hover);
+  border-color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.what-if {
+  position: absolute;
+  top: var(--top);
+  right: var(--gutter);
+  width: 380px;
+  max-height: calc(100% - var(--top) - var(--gutter));
+  overflow-y: auto;
+  padding: 12px 14px;
+  z-index: 5;
+  pointer-events: auto;
+  background: var(--panel-solid);
+}
+
+.what-if-section {
+  margin-top: 12px;
+}
+
+.what-if-section h3 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.preset-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.crew-row,
+.outage-group {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.crew-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.outage-chip[aria-pressed='true'] {
+  background: var(--critical);
+  border-color: var(--critical);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+
+.queue-compare {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.queue-compare th,
+.queue-compare td {
+  padding: 4px 6px;
+  text-align: right;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.queue-compare th[scope='row'],
+.queue-compare thead th:first-child {
+  text-align: left;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.reset-button {
+  margin-top: 14px;
+  width: 100%;
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.kpi-delta {
+  margin: 4px 0 0;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.tone-good {
+  color: var(--good);
+}
+
+.tone-bad {
+  color: var(--critical);
+}
+
+.tone-neutral {
+  color: var(--muted);
+}
+
+.status-badge.offline {
+  display: inline-block;
+  margin: 0 0 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  background: var(--critical);
+  color: var(--on-accent);
+}
+
+.unit-control {
+  margin-top: 8px;
+}
+
+@media (max-width: 720px) {
+  /* The What-if drawer becomes a bottom sheet (S-10). */
+  .what-if {
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: auto;
+    max-height: 70vh;
+    border-radius: 16px 16px 0 0;
   }
 }

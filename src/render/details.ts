@@ -11,6 +11,8 @@ export interface DetailStates {
   readonly chargers: ReadonlyMap<string, 'idle' | 'charging'>;
   /** The tow truck's beacon flashes while it carries a car. */
   readonly towBeacon: boolean;
+  /** Units taken offline (S-2): hazard cones and a red status light. */
+  readonly offlineUnits: ReadonlySet<string>;
 }
 
 /** Live building details from existing snapshot data (V-9, P9); no simulation changes. */
@@ -19,7 +21,9 @@ export function detailStates(snapshot: Snapshot): DetailStates {
   const openDoors = new Set<string>();
   const raisedBarriers = new Set<string>();
   const chargers = new Map<string, 'idle' | 'charging'>();
+  const offlineUnits = new Set<string>();
   for (const r of snapshot.resources) {
+    if (!r.online) offlineUnits.add(r.id);
     const occupied = r.occupantId !== null;
     switch (r.kind) {
       case 'wash':
@@ -38,5 +42,5 @@ export function detailStates(snapshot: Snapshot): DetailStates {
         break;
     }
   }
-  return { spinningWash, openDoors, raisedBarriers, chargers, towBeacon: snapshot.agents.some((a) => a.parentId !== null) };
+  return { spinningWash, openDoors, raisedBarriers, chargers, towBeacon: snapshot.agents.some((a) => a.parentId !== null), offlineUnits };
 }

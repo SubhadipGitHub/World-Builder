@@ -38,6 +38,37 @@ describe('createRentPool (L-2)', () => {
   });
 });
 
+describe('RentPool.pullForward (S-1, W5)', () => {
+  it('makes the n soonest rentals due now, keeping their order', () => {
+    const pool = createRentPool();
+    pool.add('late', 0, 900);
+    pool.add('soon', 0, 300);
+    pool.add('mid', 0, 600);
+    pool.add('last', 0, 1_200);
+    expect(pool.pullForward(2, 100)).toEqual(['soon', 'mid']);
+    expect(pool.due(100, 10)).toEqual(['soon', 'mid']);
+    expect(pool.due(100, 10)).toEqual([]);
+    expect(pool.size).toBe(2);
+  });
+
+  it('returns fewer ids when the pool is smaller and leaves already-due rentals alone', () => {
+    const pool = createRentPool();
+    pool.add('due', 0, 50);
+    pool.add('later', 0, 500);
+    expect(pool.pullForward(5, 100)).toEqual(['later']);
+    expect(pool.due(100, 10)).toEqual(['due', 'later']);
+    expect(createRentPool().pullForward(3, 0)).toEqual([]);
+  });
+
+  it('still respects back-pressure in due()', () => {
+    const pool = createRentPool();
+    for (let i = 0; i < 5; i++) pool.add(`v${String(i)}`, 0, 1_000 + i);
+    pool.pullForward(5, 10);
+    expect(pool.due(10, 1)).toEqual(['v0']);
+    expect(pool.due(10, 1)).toEqual(['v1']);
+  });
+});
+
 describe('rentalDuration', () => {
   it('never goes below the minimum and averages near mean', () => {
     const rng = createRng(11);

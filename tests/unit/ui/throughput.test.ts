@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ResourceView } from '../../../src/sim/world';
 import { createThroughputTracker } from '../../../src/ui/throughput';
 
-const wash = (occupantId: string | null): ResourceView[] => [{ id: 'wash1', kind: 'wash', occupantId, queueLength: 0, progress: null }];
+const wash = (occupantId: string | null): ResourceView[] => [{ id: 'wash1', kind: 'wash', occupantId, queueLength: 0, progress: null, online: true }];
 
 describe('createThroughputTracker (I-4)', () => {
   it('counts an occupant leaving as a completion', () => {

@@ -1,3 +1,4 @@
+import type { ScenarioView } from '../../../src/sim/scenario';
 import type { AgentView, Metrics, ResourceView, Snapshot } from '../../../src/sim/world';
 
 export const agent = (overrides: Partial<AgentView> = {}): AgentView => ({
@@ -30,6 +31,16 @@ export const resource = (overrides: Partial<ResourceView> = {}): ResourceView =>
   occupantId: null,
   queueLength: 0,
   progress: null,
+  online: true,
+  ...overrides,
+});
+
+export const idleScenario = (overrides: Partial<ScenarioView> = {}): ScenarioView => ({
+  offline: [],
+  crews: { inspection: 'normal', wash: 'normal', service: 'normal' },
+  surgeRemainingSec: null,
+  active: false,
+  lastChangeAt: null,
   ...overrides,
 });
 
@@ -41,6 +52,8 @@ export const snapshot = (agents: AgentView[] = [], resources: ResourceView[] = [
   timeScale: 20,
   agents,
   resources,
+  scenario: idleScenario(),
+  counterQueue: 0,
   ...overrides,
 });
 

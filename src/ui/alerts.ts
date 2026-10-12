@@ -1,5 +1,8 @@
 import type { SimEvent } from '../sim/events';
+import type { ScenarioEvent } from '../sim/scenario';
 import type { Snapshot } from '../sim/world';
+import { unitLabel } from './format';
+import { CREW_LABEL, LEVEL_LABEL } from './scenario';
 
 export type AlertSeverity = 'info' | 'warning' | 'critical';
 
@@ -10,6 +13,8 @@ export interface Alert {
   readonly message: string;
   /** Vehicle to select when the alert is clicked, if any. */
   readonly vehicleId: string | null;
+  /** Unit to select when the alert is clicked (scenario alerts, S-9), if any. */
+  readonly unitId: string | null;
   readonly simTimeSec: number;
 }
 
@@ -19,6 +24,9 @@ export interface Alert {
  *  - towDispatched → info "Tow truck dispatched for <id>"
  *  - queueOverflow → warning "<Station> queue at <n> cars" (e.g. "Wash queue at 7 cars")
  *  - an EV staged below the SoC threshold (snapshot check, once per vehicle per stay) → warning "<id> staged at <n>% charge"
+ *  - scenario (S-9), info, with unitId for unit changes: unitOffline "<Unit> taken offline"; unitOnline "<Unit> back online";
+ *    surgeStarted "Surge: flight bank landed"; surgeEnded "Surge ended"; crewChanged "<Station> crew: <short-staffed|normal|extra crew>";
+ *    reset "Scenario reset to normal"; rejected is not shown
  */
 export interface AlertFeed {
   ingest(events: readonly SimEvent[]): void;
@@ -37,14 +45,34 @@ const STATIONS: Readonly<Record<string, string>> = {
   gate: 'Exit gate',
 };
 
+/** Wording for scenario alerts (S-9); null for events that are not shown. */
+function scenarioMessage(e: ScenarioEvent): string | null {
+  switch (e.change) {
+    case 'surgeStarted':
+      return 'Surge: flight bank landed';
+    case 'surgeEnded':
+      return 'Surge ended';
+    case 'unitOffline':
+      return `${unitLabel(e.unitId ?? '')} taken offline`;
+    case 'unitOnline':
+      return `${unitLabel(e.unitId ?? '')} back online`;
+    case 'crewChanged':
+      return e.station && e.level ? `${CREW_LABEL[e.station]} crew: ${LEVEL_LABEL[e.level].toLowerCase()}` : null;
+    case 'reset':
+      return 'Scenario reset to normal';
+    case 'rejected':
+      return null;
+  }
+}
+
 export function createAlertFeed(max = 50): AlertFeed {
   let alerts: Alert[] = [];
   let unread = 0;
   let counter = 0;
   const lowEvs = new Set<string>();
 
-  const push = (severity: AlertSeverity, message: string, vehicleId: string | null, simTimeSec: number): void => {
-    alerts.unshift({ id: `alert-${String(++counter)}`, severity, message, vehicleId, simTimeSec });
+  const push = (severity: AlertSeverity, message: string, vehicleId: string | null, simTimeSec: number, unitId: string | null = null): void => {
+    alerts.unshift({ id: `alert-${String(++counter)}`, severity, message, vehicleId, unitId, simTimeSec });
     if (alerts.length > max) alerts = alerts.slice(0, max);
     unread++;
   };
@@ -63,6 +91,11 @@ export function createAlertFeed(max = 50): AlertFeed {
           case 'queueOverflow':
             push('warning', `${STATIONS[e.resource] ?? e.resource} queue at ${String(e.length)} cars`, null, e.simTimeSec);
             break;
+          case 'scenario': {
+            const message = scenarioMessage(e);
+            if (message) push('info', message, null, e.simTimeSec, e.unitId ?? null);
+            break;
+          }
           default:
             break;
         }

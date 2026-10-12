@@ -28,6 +28,12 @@ export interface ResourcePool {
   unitOf(agentId: string): string | null;
   waiting(): readonly string[];
   freeCount(tag?: string): number;
+  /**
+   * Takes a unit offline or back online (S-2, W3). An offline unit is never granted and not
+   * counted as free; its current occupant keeps it until release. Throws on an unknown unit.
+   */
+  setOnline(unitId: string, online: boolean): void;
+  isOnline(unitId: string): boolean;
 }
 
 interface Waiter {
@@ -44,9 +50,11 @@ export function createResourcePool(units: readonly ResourceUnit[]): ResourcePool
     occupants.set(u.id, null);
   }
   const holding = new Map<string, string>();
+  const offline = new Set<string>();
   let queue: Waiter[] = [];
 
   const matches = (u: ResourceUnit, tag: string | undefined): boolean => tag === undefined || u.tag === tag;
+  const free = (u: ResourceUnit): boolean => occupants.get(u.id) === null && !offline.has(u.id);
 
   return {
     capacity: units.length,
@@ -59,7 +67,7 @@ export function createResourcePool(units: readonly ResourceUnit[]): ResourcePool
     allocate() {
       const grants: Grant[] = [];
       queue = queue.filter((w) => {
-        const unit = units.find((u) => occupants.get(u.id) === null && matches(u, w.tag));
+        const unit = units.find((u) => free(u) && matches(u, w.tag));
         if (!unit) return true;
         occupants.set(unit.id, w.agentId);
         holding.set(w.agentId, unit.id);
@@ -81,6 +89,12 @@ export function createResourcePool(units: readonly ResourceUnit[]): ResourcePool
     occupant: (unitId) => occupants.get(unitId) ?? null,
     unitOf: (agentId) => holding.get(agentId) ?? null,
     waiting: () => queue.map((w) => w.agentId),
-    freeCount: (tag) => units.filter((u) => occupants.get(u.id) === null && matches(u, tag)).length,
+    freeCount: (tag) => units.filter((u) => free(u) && matches(u, tag)).length,
+    setOnline(unitId, online) {
+      if (!occupants.has(unitId)) throw new Error(`Unknown unit ${unitId}`);
+      if (online) offline.delete(unitId);
+      else offline.add(unitId);
+    },
+    isOnline: (unitId) => !offline.has(unitId),
   };
 }

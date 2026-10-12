@@ -54,10 +54,10 @@ function poolGeometry(radius: number): BufferGeometry {
   return g;
 }
 
-const SIZE: Readonly<Record<LampPlacement['kind'], number>> = { street: 1, walkway: 0.75, flood: 1.35 };
-const POOL_RADIUS: Readonly<Record<LampPlacement['kind'], number>> = { street: 6.5, walkway: 4, flood: 8.5 };
+const SIZE: Readonly<Record<LampPlacement['kind'], number>> = { street: 1, walkway: 0.75, flood: 1.35, mast: 2.2 };
+const POOL_RADIUS: Readonly<Record<LampPlacement['kind'], number>> = { street: 8.5, walkway: 5, flood: 11, mast: 16 };
 /** Peak pool brightness: enough to read as a pool of light without washing out the ground. */
-const POOL_PEAK = 0.32;
+const POOL_PEAK = 0.24;
 
 /** Roadside lighting (V-6): poles, lenses and light pools for every placement, switched with a stagger. */
 export function createLampsView(): LampsView {

@@ -11,6 +11,11 @@ export interface RentPool {
    * ordered by return time then id. Vehicles over the limit stay due (back-pressure).
    */
   due(nowSimSec: number, limit: number): readonly string[];
+  /**
+   * Surge (S-1, W5): the `n` rentals due soonest become due at `nowSimSec`, keeping their order.
+   * Returns their ids (fewer if the pool is smaller). Rentals already due are left as they are.
+   */
+  pullForward(n: number, nowSimSec: number): readonly string[];
 }
 
 interface Rental {
@@ -43,6 +48,15 @@ export function createRentPool(): RentPool {
       const out = rentals.splice(0, n).map((r) => r.id);
       for (const id of out) ids.delete(id);
       return out;
+    },
+    pullForward(n, nowSimSec) {
+      // Rentals are sorted by return time: skip those already due, then take the next n.
+      let first = 0;
+      while (first < rentals.length && (rentals[first] as Rental).returnAt <= nowSimSec) first++;
+      const pulled = rentals.slice(first, first + Math.max(0, n));
+      // Same relative order, all due now: they stay sorted after the already-due ones.
+      for (let i = 0; i < pulled.length; i++) rentals[first + i] = { id: (pulled[i] as Rental).id, returnAt: nowSimSec };
+      return pulled.map((r) => r.id);
     },
   };
 }

@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/preact';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentView, ResourceView, Snapshot } from '../../../src/sim/world';
+import { idleScenario } from './fixtures';
 import { DetailPanel } from '../../../src/ui/m1/DetailPanel';
 import type { ThroughputTracker } from '../../../src/ui/throughput';
 
@@ -38,6 +39,8 @@ const snapshot = (agents: AgentView[], resources: ResourceView[] = []): Snapshot
   timeScale: 20,
   agents,
   resources,
+  scenario: idleScenario(),
+  counterQueue: 0,
 });
 
 const tracker = (perHour = 0, lastOccupant: string | null = null, lastCompletion: number | null = null): ThroughputTracker => ({
@@ -95,7 +98,7 @@ describe('DetailPanel (I-4)', () => {
   });
 
   it('shows a busy bay with progress, queue and throughput', () => {
-    const res: ResourceView = { id: 'wash2', kind: 'wash', occupantId: base.id, queueLength: 3, progress: 0.5 };
+    const res: ResourceView = { id: 'wash2', kind: 'wash', occupantId: base.id, queueLength: 3, progress: 0.5, online: true };
     render(<DetailPanel selection={{ kind: 'resource', id: 'wash2' }} snapshot={snapshot([base], [res])} throughput={tracker(14)} onClose={() => undefined} />);
     expect(screen.getByRole('heading', { name: 'Wash bay 2' })).toBeTruthy();
     expect(row('Occupant').textContent).toBe(base.id);
@@ -105,14 +108,14 @@ describe('DetailPanel (I-4)', () => {
   });
 
   it('shows an idle unit', () => {
-    const res: ResourceView = { id: 'charger1', kind: 'charger', occupantId: null, queueLength: 0, progress: null };
+    const res: ResourceView = { id: 'charger1', kind: 'charger', occupantId: null, queueLength: 0, progress: null, online: true };
     render(<DetailPanel selection={{ kind: 'resource', id: 'charger1' }} snapshot={snapshot([], [res])} throughput={tracker()} onClose={() => undefined} />);
     expect(row('Occupant').textContent).toBe('Idle');
     expect(row('Progress').textContent).toBe('—');
   });
 
   it('shows a gate’s last exit and exits per hour', () => {
-    const res: ResourceView = { id: 'gate1', kind: 'gate', occupantId: null, queueLength: 1, progress: null };
+    const res: ResourceView = { id: 'gate1', kind: 'gate', occupantId: null, queueLength: 1, progress: null, online: true };
     render(
       <DetailPanel selection={{ kind: 'resource', id: 'gate1' }} snapshot={snapshot([], [res])} throughput={tracker(9, 'GL-PGW-11111', 3_300)} onClose={() => undefined} />,
     );
@@ -126,5 +129,49 @@ describe('DetailPanel (I-4)', () => {
     render(<DetailPanel selection={{ kind: 'agent', id: base.id }} snapshot={snapshot([base])} throughput={tracker()} onClose={onClose} />);
     fireEvent.click(screen.getByRole('button', { name: 'Close details' }));
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('DetailPanel unit control (S-8)', () => {
+  const control = (reason: string | null = null) => ({
+    offlineReason: vi.fn(() => reason),
+    isOutageable: (id: string) => !id.includes('-'),
+    onSetOnline: vi.fn(),
+  });
+
+  it('offers "Take offline" for an online unit', () => {
+    const c = control();
+    const res: ResourceView = { id: 'wash1', kind: 'wash', occupantId: null, queueLength: 0, progress: null, online: true };
+    render(<DetailPanel selection={{ kind: 'resource', id: 'wash1' }} snapshot={snapshot([], [res])} throughput={tracker()} onClose={() => undefined} unitControl={c} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Take offline' }));
+    expect(c.onSetOnline).toHaveBeenLastCalledWith('wash1', false);
+    expect(screen.queryByText('Offline')).toBeNull();
+  });
+
+  it('shows an Offline badge and "Bring online" for an offline unit', () => {
+    const c = control();
+    const res: ResourceView = { id: 'gate2', kind: 'gate', occupantId: null, queueLength: 0, progress: null, online: false };
+    render(<DetailPanel selection={{ kind: 'resource', id: 'gate2' }} snapshot={snapshot([], [res])} throughput={tracker()} onClose={() => undefined} unitControl={c} />);
+    expect(screen.getByText('Offline')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Bring online' }));
+    expect(c.onSetOnline).toHaveBeenLastCalledWith('gate2', true);
+  });
+
+  it('disables "Take offline" with the reason for the last open unit', () => {
+    const c = control('At least one exit gate must stay open');
+    const res: ResourceView = { id: 'gate1', kind: 'gate', occupantId: null, queueLength: 0, progress: null, online: true };
+    render(<DetailPanel selection={{ kind: 'resource', id: 'gate1' }} snapshot={snapshot([], [res])} throughput={tracker()} onClose={() => undefined} unitControl={c} />);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Take offline' }).disabled).toBe(true);
+    expect(screen.getByText('At least one exit gate must stay open')).toBeTruthy();
+  });
+
+  it('has no toggle for slots or without a unit control', () => {
+    const res: ResourceView = { id: 'ev-04', kind: 'slot', occupantId: null, queueLength: 0, progress: null, online: true };
+    render(<DetailPanel selection={{ kind: 'resource', id: 'ev-04' }} snapshot={snapshot([], [res])} throughput={tracker()} onClose={() => undefined} unitControl={control()} />);
+    expect(screen.queryByRole('button', { name: 'Take offline' })).toBeNull();
+    cleanup();
+    const wash: ResourceView = { id: 'wash1', kind: 'wash', occupantId: null, queueLength: 0, progress: null, online: true };
+    render(<DetailPanel selection={{ kind: 'resource', id: 'wash1' }} snapshot={snapshot([], [wash])} throughput={tracker()} onClose={() => undefined} />);
+    expect(screen.queryByRole('button', { name: 'Take offline' })).toBeNull();
   });
 });

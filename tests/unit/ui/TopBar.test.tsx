@@ -9,8 +9,8 @@ import { agent, snapshot } from './fixtures';
 afterEach(cleanup);
 
 const alerts: Alert[] = [
-  { id: 'a2', severity: 'critical', message: 'Severe damage on GL-PGW-00002 — tow requested', vehicleId: 'GL-PGW-00002', simTimeSec: 20 },
-  { id: 'a1', severity: 'warning', message: 'Wash queue at 7 cars', vehicleId: null, simTimeSec: 10 },
+  { id: 'a2', severity: 'critical', message: 'Severe damage on GL-PGW-00002 — tow requested', vehicleId: 'GL-PGW-00002', unitId: null, simTimeSec: 20 },
+  { id: 'a1', severity: 'warning', message: 'Wash queue at 7 cars', vehicleId: null, unitId: null, simTimeSec: 10 },
 ];
 
 function setup(overrides: Partial<TopBarProps> = {}) {
@@ -31,6 +31,12 @@ function setup(overrides: Partial<TopBarProps> = {}) {
     onOpenAlerts: vi.fn(),
     onAlert: vi.fn(),
     onPick: vi.fn(),
+    speed: 1,
+    onSpeed: vi.fn(),
+    chips: [],
+    onOpenWhatIf: vi.fn(),
+    labelsOn: true,
+    onLabels: vi.fn(),
     ...overrides,
   };
   render(<TopBar {...props} />);
@@ -93,5 +99,43 @@ describe('TopBar (D-2)', () => {
     expect(toggle.getAttribute('aria-checked')).toBe('false');
     fireEvent.click(toggle);
     expect(props.onTheme).toHaveBeenCalledWith('light');
+  });
+});
+
+describe('TopBar what-if additions (S-6, S-7, S-18)', () => {
+  it('opens the What-if drawer from its button', () => {
+    const props = setup();
+    fireEvent.click(screen.getByRole('button', { name: 'What-if scenarios' }));
+    expect(props.onOpenWhatIf).toHaveBeenCalledOnce();
+  });
+
+  it('shows active-scenario chips that open the drawer, and none when normal', () => {
+    const props = setup({ chips: ['Surge 42 min', '2 units offline'] });
+    const chips = screen.getByRole('list', { name: 'Active scenario' });
+    expect(within(chips).getAllByRole('button').map((b) => b.textContent)).toEqual(['Surge 42 min', '2 units offline']);
+    fireEvent.click(within(chips).getByRole('button', { name: 'Surge 42 min' }));
+    expect(props.onOpenWhatIf).toHaveBeenCalledOnce();
+    cleanup();
+    setup();
+    expect(screen.queryByRole('list', { name: 'Active scenario' })).toBeNull();
+  });
+
+  it('has the simulation speed control', () => {
+    const props = setup({ speed: 0 });
+    const group = screen.getByRole('group', { name: 'Simulation speed' });
+    expect(within(group).getByRole('button', { name: 'Pause' }).getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(within(group).getByRole('button', { name: '40×' }));
+    expect(props.onSpeed).toHaveBeenLastCalledWith(2);
+  });
+});
+
+describe('TopBar building labels switch (I-4)', () => {
+  it('toggles building labels from the user menu', () => {
+    const props = setup({ labelsOn: true });
+    fireEvent.click(screen.getByRole('button', { name: 'User menu' }));
+    const sw = screen.getByRole('switch', { name: 'Building labels' });
+    expect(sw.getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(sw);
+    expect(props.onLabels).toHaveBeenLastCalledWith(false);
   });
 });

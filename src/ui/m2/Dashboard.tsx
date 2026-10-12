@@ -7,8 +7,13 @@ import type { DayNight } from '../../render/environment';
 import type { TrackerStage } from '../../sim/lifecycle';
 import type { Snapshot } from '../../sim/world';
 import type { Alert } from '../alerts';
-import type { KpiCard } from '../kpis';
+import type { CrewLevel, CrewStation, PresetId } from '../../config/scenarios';
+import type { FacilityId, FacilityStatus } from '../facilities';
+import type { KpiCard, KpiId } from '../kpis';
 import { DetailPanel } from '../m1/DetailPanel';
+import { WhatIfDrawer, type OutageGroup } from '../m4/WhatIfDrawer';
+import type { Speed } from '../m4/SpeedControl';
+import { scenarioChips, type KpiDelta, type QueueKey } from '../scenario';
 import type { SearchResult } from '../search';
 import type { UiStore } from '../store';
 import type { CheckoutRow, FleetRow, QueueRow } from '../tables';
@@ -28,6 +33,15 @@ export interface DashboardData {
   readonly unread: number;
   readonly steps: readonly TimelineStep[] | null;
   readonly stageCounts: Readonly<Record<TrackerStage, number>> | null;
+  /** KPI deltas against the baseline while relevant (S-12); empty otherwise. */
+  readonly deltas: Partial<Readonly<Record<KpiId, KpiDelta | null>>>;
+  /** Queue lengths now and in the baseline (S-14). */
+  readonly queues: Readonly<Record<QueueKey, number>>;
+  readonly baselineQueues: Readonly<Record<QueueKey, number>>;
+  /** Building indicators (I-1). */
+  readonly facilities: readonly FacilityStatus[];
+  /** Compact labels when zoomed out (I-4). */
+  readonly compactLabels: boolean;
 }
 
 export interface TableData {
@@ -40,6 +54,8 @@ export interface Settings {
   readonly weather: WeatherMode;
   readonly dayNight: DayNight;
   readonly theme: Theme;
+  readonly speed: Speed;
+  readonly labels: boolean;
 }
 
 export interface DashboardProps {
@@ -57,6 +73,25 @@ export interface DashboardProps {
   readonly onOpenAlerts: () => void;
   readonly onPick: (result: SearchResult) => void;
   readonly onSelectVehicle: (id: string) => void;
+  /** Selects a unit (scenario alerts, S-9). */
+  readonly onSelectUnit: (id: string) => void;
+  readonly scenario: ScenarioActions;
+  readonly onLabels: (on: boolean) => void;
+  /** Flies the camera to a facility (Q2). */
+  readonly onFacility: (id: FacilityId) => void;
+}
+
+/** What-if wiring (§9): levers go to the visible simulation only; speed to both (W7–W9). */
+export interface ScenarioActions {
+  readonly outages: readonly OutageGroup[];
+  readonly offlineReason: (unitId: string) => string | null;
+  readonly isOutageable: (unitId: string) => boolean;
+  readonly onSurge: () => void;
+  readonly onCrew: (station: CrewStation, level: CrewLevel) => void;
+  readonly onSetOnline: (unitId: string, online: boolean) => void;
+  readonly onPreset: (id: PresetId) => void;
+  readonly onReset: () => void;
+  readonly onSpeed: (speed: Speed) => void;
 }
 
 /**
@@ -66,6 +101,7 @@ export interface DashboardProps {
  */
 export function Dashboard(props: DashboardProps): JSX.Element {
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [whatIfOpen, setWhatIfOpen] = useState(false);
   const data = props.data.value;
   const tables = props.tables.value;
   const settings = props.settings.value;
@@ -91,10 +127,37 @@ export function Dashboard(props: DashboardProps): JSX.Element {
         onOpenAlerts={props.onOpenAlerts}
         onAlert={(a) => {
           if (a.vehicleId) props.onSelectVehicle(a.vehicleId);
+          else if (a.unitId) props.onSelectUnit(a.unitId);
         }}
         onPick={props.onPick}
+        speed={settings.speed}
+        onSpeed={props.scenario.onSpeed}
+        chips={data.snapshot ? scenarioChips(data.snapshot.scenario) : []}
+        onOpenWhatIf={() => {
+          setWhatIfOpen(true);
+        }}
+        labelsOn={settings.labels}
+        onLabels={props.onLabels}
       />
-      <KpiCards cards={data.cards} />
+      <KpiCards cards={data.cards} deltas={data.deltas} />
+      {data.snapshot ? (
+        <WhatIfDrawer
+          open={whatIfOpen}
+          onClose={() => {
+            setWhatIfOpen(false);
+          }}
+          view={data.snapshot.scenario}
+          outages={props.scenario.outages}
+          offlineReason={props.scenario.offlineReason}
+          queues={data.queues}
+          baselineQueues={data.baselineQueues}
+          onSurge={props.scenario.onSurge}
+          onCrew={props.scenario.onCrew}
+          onSetOnline={props.scenario.onSetOnline}
+          onPreset={props.scenario.onPreset}
+          onReset={props.scenario.onReset}
+        />
+      ) : null}
       <div class="sheet" data-testid="bottom-sheet" data-open={sheetOpen ? 'true' : 'false'}>
         <button
           type="button"
@@ -114,6 +177,11 @@ export function Dashboard(props: DashboardProps): JSX.Element {
             throughput={props.throughput}
             onClose={() => {
               props.store.clearSelection();
+            }}
+            unitControl={{
+              offlineReason: props.scenario.offlineReason,
+              isOutageable: props.scenario.isOutageable,
+              onSetOnline: props.scenario.onSetOnline,
             }}
           />
         </div>

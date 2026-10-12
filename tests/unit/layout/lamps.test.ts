@@ -27,9 +27,15 @@ function distanceToEdge(p: Vec2, e: Edge): number {
 describe('lampPlacements (V-6, P4)', () => {
   it('is deterministic and places street, walkway and flood lamps', () => {
     expect(lampPlacements()).toEqual(lamps);
-    expect(lamps.filter((l) => l.kind === 'street').length).toBeGreaterThanOrEqual(60);
+    expect(lamps.filter((l) => l.kind === 'street').length).toBeGreaterThanOrEqual(50);
     expect(lamps.filter((l) => l.kind === 'walkway').length).toBeGreaterThanOrEqual(3);
-    expect(lamps.filter((l) => l.kind === 'flood').length).toBeGreaterThanOrEqual(8);
+    expect(lamps.filter((l) => l.kind === 'flood').length).toBe(8);
+    expect(lamps.filter((l) => l.kind === 'mast').length).toBe(4);
+  });
+
+  it('uses fewer, wider-spaced lamps after the visual review (about 35 m)', () => {
+    expect(LAMP_SPACING).toBe(35);
+    expect(lamps.length).toBeLessThanOrEqual(120);
   });
 
   it('never stands inside a road corridor', () => {
@@ -89,6 +95,19 @@ describe('lampPlacements (V-6, P4)', () => {
       const road = vehicleEdges.reduce((best, e) => (distanceToEdge(l, e) < distanceToEdge(l, best) ? e : best));
       const ahead = { x: l.x + Math.cos(l.heading) * 2, z: l.z + Math.sin(l.heading) * 2 };
       expect(distanceToEdge(ahead, road)).toBeLessThan(distanceToEdge(l, road));
+    }
+  });
+});
+
+describe('lampPlacements: Ready-lot light masts (SEC-3, G7)', () => {
+  it('places 4 masts over the Ready lot, clear of roads and other lamps', () => {
+    const masts = lamps.filter((l) => l.kind === 'mast');
+    expect(masts).toHaveLength(4);
+    const lot = hub.buildings.find((b) => b.id === 'lot')!;
+    for (const m of masts) {
+      expect(Math.abs(m.x - lot.x)).toBeLessThanOrEqual(lot.width / 2 + 6);
+      expect(Math.abs(m.z - lot.z)).toBeLessThanOrEqual(lot.depth / 2 + 6);
+      for (const e of graph.edges) expect(distanceToEdge(m, e)).toBeGreaterThanOrEqual(e.width / 2 + 0.5);
     }
   });
 });

@@ -20,6 +20,15 @@
 | D10 | M3 lighting (2026-10-12) | **Roadside street lights with light pools, plus a soft bloom glow at night** on the top quality tier; bloom turns off automatically on lower tiers. |
 | D11 | M3 scope (2026-10-12) | **Vehicles, buildings, landscape and people.** |
 | D12 | M3 budgets (2026-10-12) | **Relaxed for visuals** (§8.3). Phone performance is revisited after real-device testing. |
+| D13 | M4 focus (2026-10-12) | **Ops what-if scenarios**: demand surge, unit outages, crew levels and named presets (§9). |
+| D14 | M4 impact readout (2026-10-12) | **Shadow baseline**: a second, invisible simulation with the same seed runs without the scenario, and the KPI cards show live deltas against it. |
+| D15 | M4 controls (2026-10-12) | A **What-if** button in the top bar opens a scenarios drawer. Outages can also be toggled from a unit's detail panel. |
+| D16 | M4 simulation speed (2026-10-12) | **Pause plus speed steps** in the top bar (exact semantics in §9.5). |
+| D17 | M5/M6 delivery (2026-10-12) | **Two milestones.** M5: branding, building indicators, and security and ground details around the hub (§10). M6: airport context (§11). |
+| D18 | M5 scope (2026-10-12) | **All of it.** Building signage, the entrance pylon and flags, wayfinding, fleet livery, live building indicators (names plus status), the perimeter and checkpoint, CCTV and light masts, the patrol car, and ground details. |
+| D19 | M6 layout (2026-10-12) | **Airside to the north** of the hub, landside to the west and south. The map grows about 2×, and an "Airport" area is added. |
+| D20 | M6 flights (2026-10-12) | **Visual only**, on a deterministic schedule; the simulation is unchanged. |
+| D21 | M5/M6 performance (2026-10-12) | **Detail scales by quality tier.** The ≤ 300 / ≤ 150 draw-call budgets stay. |
 
 > Note on D2: the pack loads Three.js "from a CDN". We bundle it inline instead. The result is still one HTML file and it works offline.
 
@@ -183,8 +192,8 @@ Goal: a premium, Pixar-style living diorama with warm roadside lighting at night
   - A gradient sky dome with a few soft clouds, and a distant horizon. It follows the day/night cycle and weather.
 - **V-5 People.** Pixar-style characters: head, body, arms and legs, with a simple walk bob and varied clothing colours. Staff wear gold hi-vis vests.
 - **V-6 Roadside lighting.**
-  - Lamp posts along every vehicle road and the walkway, about every 25 m. Main roads have them on both sides.
-  - Each lamp lights a warm pool with a radial falloff on the ground; the Ready lot has floodlights.
+  - Lamp posts along every vehicle road and the walkway, about every 35 m (revised from 25 m after the visual review, 2026-10-12: fewer, softer lamps). Main roads have them on both sides, staggered; minor roads on one side.
+  - Each lamp lights a warm pool with a radial falloff on the ground; the Ready lot has 8 floodlights. Under glass canopies the pools stay visible, so canopies read as lit at night (kept after review).
   - Lamps switch on at dusk, staggered over a few seconds, rather than all at once, and switch off at dawn (X-2).
 - **V-7 Bloom.** At night, a soft glow around lamps, headlights, signage and windows. On the top quality tier only; it turns off on lower tiers and on touch devices by default.
 - **V-8 Lighting finish.**
@@ -217,3 +226,211 @@ Goal: a premium, Pixar-style living diorama with warm roadside lighting at night
 ### 8.4 Resolved
 - The hub still opens at **08:00**, as now. Street lights first appear at dusk (about 30 real minutes in), or straight away with the Night button.
 - The budget numbers in §8.3 are approved.
+
+## 9. M4: Ops what-if scenarios (APPROVED 2026-10-12)
+
+Goal: turn the hub from a view into a decision tool. An ops manager injects a disruption or a staffing change, watches the hub react, and reads the impact as live deltas against an undisturbed baseline. The world, dashboard and visuals from M1–M3 are unchanged apart from the additions below. Everything stays deterministic and in one offline file (N-1).
+
+### 9.1 Scenario levers
+- **S-1 Demand surge ("flight bank lands").**
+  - The 15 rentals due back soonest return now (at most as many as are on rent).
+  - Customer pickups run at ×2 for the next 60 simulated minutes.
+  - Triggering it again while a surge is active restarts the 60-minute window and pulls forward another batch.
+  - Admission still respects the existing back-pressure: cars that can't enter yet wait off-map rather than spawning on top of each other (L-4).
+- **S-2 Unit outages.**
+  - Any return lane, wash bay, service bay, EV charger, fuel pump or exit gate can be taken **offline** or brought back **online**.
+  - An occupied unit finishes its current job, then accepts no one new. Waiting cars are served by the remaining units, in the same FIFO order.
+  - **The last online unit of a station cannot be taken offline.** The control is disabled with the reason "At least one wash bay must stay open". This avoids an unrecoverable hub-wide gridlock.
+  - An offline unit shows hazard cones and a red status light in the world, and an "Offline" badge in its detail panel.
+  - **Departure back-pressure** (added 2026-10-12, found by the gate-closure soak): when the gates can't keep up, customers wait at the counter rather than walking to their car. The gate queue therefore never spills across the lot walkway; the cost shows as fewer checkouts and lower utilisation.
+- **S-3 Crew levels.**
+  - Three stations can be staffed independently: **inspection**, **wash** and **service**.
+  - The levels are **Short-staffed**, **Normal** and **Extra crew**. They multiply the station's job durations by ×1.5, ×1 and ×0.7.
+  - A change applies to jobs that start after it; a job already running keeps its duration.
+- **S-4 Named presets.** Each preset applies several levers at once:
+
+  | Preset | Levers |
+  |---|---|
+  | Friday evening rush | Surge (S-1), wash short-staffed |
+  | Wash tunnel down | Wash bay 1 offline, wash short-staffed |
+  | Heatwave + charger fault | Weather heatwave, 3 of 8 chargers offline |
+  | Gate closure | Exit gate 2 offline, inspection short-staffed |
+
+- **S-5 Reset to normal.**
+  - Brings every unit back online, sets every crew to Normal and ends any surge.
+  - Restores the weather that was active before a preset changed it.
+  - Manual weather changes are not part of a scenario: the menu changes both simulations (§9.3).
+
+### 9.2 Controls (D15)
+- **S-6 What-if drawer.** A top-bar button opens a glass drawer (D-1 style) containing:
+  - the surge button, with a countdown while active
+  - the crew level per station (a segmented control)
+  - outages grouped by station: chips you tap to toggle each unit
+  - the presets
+  - Reset to normal
+- **S-7 Active-scenario chips.** While any lever is not at its normal setting, the top bar shows compact chips, e.g. "Surge 42 min", "2 units offline" and "Wash: short". Tapping a chip opens the drawer. With no scenario active, nothing is shown.
+- **S-8 Unit detail panel.** A unit's panel (I-4 / D-4) gains a "Take offline" / "Bring online" toggle, with the same rules as S-2.
+- **S-9 Alerts and log.** Starting or ending each lever raises an info alert in the existing feed (D-8), e.g. "Wash bay 1 taken offline" or "Surge ended". Clicking it selects the unit.
+- **S-10 Phone.** On a phone the drawer opens as a bottom sheet (X-3).
+
+### 9.3 Impact against a baseline (D14)
+- **S-11 Shadow baseline.**
+  - A second simulation with the same seed runs in lockstep from load, invisibly.
+  - It receives the same weather and speed commands as the visible one, but no scenario levers.
+- **S-12 KPI deltas.** While a scenario is active, and for 60 simulated minutes after Reset, each KPI card (D-3) shows its delta against the baseline, e.g. "Turnaround 41 min, +12 vs normal". Colour shows good or bad: for turnaround, up is bad; for utilisation and EV state of charge, up is good.
+- **S-13 Honest noise.**
+  - The two simulations diverge randomly once their paths differ. Deltas therefore use the KPIs' existing smoothing (turnaround is already a 2-hour rolling mean).
+  - A delta smaller than the noise band (turnaround ±2 min, utilisation ±1 pt, SoC ±1 pt) reads "≈ normal".
+- **S-14 Queue impact.** The drawer shows live queue lengths for return, wash, service, charger and gate: scenario against baseline, side by side.
+
+### 9.4 Determinism and testability
+- **S-15** Scenario levers are simulation commands. The same seed plus the same command log (each command tagged with its step index) produces identical snapshots and metrics.
+- **S-16** The baseline simulation, given the same commands minus the scenario levers, is identical to a simulation that never had a scenario.
+- **S-17** Test hooks: `scenario()` (the active levers), `baselineMetrics()` and `applyScenario(command)`, all in the test build only (as in M1–M3).
+
+### 9.5 Simulation speed (D16)
+- **S-18** Top-bar control: **Pause**, then three speeds. Pause freezes the simulation, but the camera, selection and UI keep working.
+- **S-19 Recommended semantics: fast-forward the whole world.**
+  - The speeds are **20× (normal)**, **40×** and **60×** hub clock. Each runs 1, 2 or 3 simulation steps per tick, so cars visibly drive faster too.
+  - KPIs stay comparable across speeds, because the simulation is the same step for step.
+  - The alternative, changing only the process clock (`setTimeScale`), would leave driving at natural speed (L-6). At 60× a 30-second drive would count as 30 simulated minutes, inflating turnaround depending on the speed chosen. A true "1× real time" would make the hub look frozen (a wash would take 3 real minutes), so it is replaced by Pause. **See open question Q1.**
+- **S-20** Speed applies to both simulations equally, so baseline deltas stay valid.
+
+### 9.6 Budgets and non-functional
+- Both simulations together at 60× (6 steps per tick) take ≤ 4 ms per frame on desktop. Measured today: 0.08 ms per step, about 0.5 ms.
+- Bundle ≤ 600 KB gzipped (§8.3). Draw-call budgets are unchanged: hazard cones are one instanced mesh.
+- Accessibility (N-5): every control is keyboard-reachable and labelled, and chips have text, not just colour.
+- Unchanged: N-1 one offline file, N-7 no real brands, and all M1–M3 requirements and tests.
+
+### 9.7 User stories
+- As an **ops manager**, I tap "Friday evening rush" and watch return lanes and the wash queue swell. The turnaround card reads "+14 vs normal", so I can see what a rush costs.
+- As an **ops manager**, I take Wash bay 1 offline from its panel. Cars queue for bay 2, cones appear on bay 1, and an alert is logged.
+- As an **ops manager**, I set the wash to Extra crew during the outage and see the turnaround delta shrink. That tells me whether extra staff offsets the outage.
+- As a **viewer**, I fast-forward to 60× to see a scenario play out, then pause to inspect a queue.
+
+### 9.8 Resolved (approved 2026-10-12: all proposed defaults accepted)
+- **Q1 Speed control.** **Pause / 20× / 40× / 60× by fast-forwarding the whole world (S-19)**, instead of the "1×" originally picked (see S-19 for why).
+- **Q2 Surge size.** **15 early returns, plus pickups ×2 for 60 simulated minutes.**
+- **Q3 Crew multipliers.** **×1.5 / ×1 / ×0.7.**
+- **Q4 Last-unit rule.** **Keep at least one unit per station online** (S-2), instead of allowing a full closure, which would gridlock the hub.
+- **Q5 Presets.** **The 4 listed in S-4.**
+
+## 10. M5: Branding, building indicators and hub security (APPROVED 2026-10-12)
+
+Goal: the hub reads as a real, branded rental car center at an airport. Signs name every facility, labels show live status above each building, and a secured perimeter, wayfinding and street furniture frame it. Everything is still procedural (W-1; text is drawn at runtime, with no font or image files), fictional (N-7), and in one offline file (N-1). The simulation is unchanged except for one read-only snapshot field (I-3).
+
+### 10.1 Branding
+- **B-1 Building signage.** Each facility gets a sign in GoldLane style: a gold or white panel with dark or white text and the GoldLane mark. Signs glow at night (picked up by bloom on the top tier) and can be read from both sides where the building is open.
+
+  | Facility | Sign text |
+  |---|---|
+  | Terminal (roof, two faces) | GoldLane Rentals |
+  | Terminal (entrance) | GoldLane Express |
+  | Return canopy | Rental Car Return |
+  | Wash | Express Wash |
+  | Service garage | Service Center |
+  | EV hub | EV Fast Charge |
+  | Fuel station | Fuel |
+  | Exit gates | Exit · Thank you for choosing GoldLane |
+  | Tow depot | Tow Depot |
+
+  Text is drawn onto a canvas at runtime using the system sans-serif font, packed into one texture atlas.
+- **B-2 Entrance pylon and flags.**
+  - A 12 m GoldLane totem pylon stands at the hub entrance, lit at night.
+  - 6 gold flags on poles along the entry frontage wave gently. They stop with reduced motion and on tier 2.
+  - GoldLane banners hang on the street-facing perimeter fence (SEC-1) about every 40 m.
+- **B-3 Wayfinding.**
+  - An overhead sign gantry spans the entry road: "Rental Car Return →".
+  - The exit road has a gantry: "Airport Terminals ↑ · Exit to Airport Blvd".
+  - Roadside direction signs at the main junctions inside the hub: Wash, Service, EV Charging & Fuel, Ready Lot, Exit.
+  - Painted ground text on the entry lanes ("RETURN") and "SLOW" before pedestrian crossings.
+  - Placement follows the lamp rules (P4): never inside a road corridor, a building or another sign's spacing. Gantries clear the road by at least 5.5 m.
+- **B-4 Fleet livery.** Fleet cars get a gold GoldLane stripe and a small door mark on both sides, in every theme. It is part of the car's untinted trim, so it adds no draw calls. Roof numbers are not drawn (see Q1); the selection label already shows the car's ID.
+
+### 10.2 Building indicators
+- **I-1 Live facility labels.** A floating glass label above each facility (return canopy, wash, service, EV hub, fuel, Ready lot, exit gates, terminal), positioned every frame like the selection label (A7). Contents, refreshed at 10 Hz:
+  - the name, plus a status dot with text (status is never shown by colour alone): **OK** (green), **Busy** (amber) or **Offline** (red)
+  - a detail line:
+
+    | Facility | Detail line |
+    |---|---|
+    | Bays, lanes, chargers, pumps, gates | "2/3 busy · queue 4" |
+    | Ready lot | "18/48 staged" |
+    | Terminal | "Counter: 3 waiting" (I-3) |
+
+- **I-2 Status rules (pure, tested).**
+  - **Offline:** any unit of the facility is offline (the text says how many, e.g. "1 offline").
+  - **Busy:** no free online unit, or a queue of 3 or more.
+  - **OK:** otherwise.
+- **I-3 Counter queue.** The snapshot gains `counterQueue`: customers waiting at the counter. It is read-only and changes no behaviour; since W11 it is meaningful, because back-pressure holds customers there.
+- **I-4 Declutter and interaction.**
+  - Zoomed out (camera distance over 350 m), a label shows only its name and status dot.
+  - Labels behind the camera or off screen are hidden.
+  - Where two labels overlap on screen, the lower-priority one hides (terminal and Ready lot have the lowest priority).
+  - Clicking a label flies the camera to that facility (Q2).
+  - Labels are buttons with an accessible name such as "Express Wash, Busy, 2 of 2 busy, queue 4".
+  - A "Building labels" switch in the user menu turns them off; the choice is remembered like the theme (X-4).
+
+### 10.3 Security and environment around the hub
+- **SEC-1 Perimeter.**
+  - A chain-link fence with a barbed-wire top runs around the hub, about 12 m outside its roads. It has openings where the entry, exit and shuttle roads cross it.
+  - Concrete posts every 3 m. One instanced mesh plus a fence-fabric strip (draw-call budget, §10.5).
+- **SEC-2 Entrance checkpoint.**
+  - A guard booth with a staff figure stands beside the entry road, with a boom gate across the lane.
+  - The boom lifts as a vehicle approaches and lowers after it passes. This is render-only: vehicles never stop for it, and the simulation is unchanged.
+  - A smaller booth stands at the exit road.
+- **SEC-3 Surveillance and lighting.**
+  - CCTV poles at the entrance, the exit, the lot corners and the bays, with camera heads that pan slowly (static with reduced motion and on tier 2).
+  - 4 tall light masts over the Ready lot (they join the night lighting as floods, V-6).
+  - Emergency call boxes with a blue light along the walkway.
+  - Bollards at pedestrian crossings and the terminal frontage.
+- **SEC-4 Security patrol car.**
+  - A white-and-gold "GoldLane Security" SUV with a light bar drives a perimeter service road just outside the fence, at about 8 m/s.
+  - It is visual only, not a simulation agent, on its own road, so it can never meet hub traffic.
+  - The light bar is dim amber by day and flashes at night. It is hidden on tier 2.
+- **ENV-1 Ground details.**
+  - Jersey barriers along the entry road edge, planters and benches at the terminal frontage, and a bus shelter with a shuttle-stop sign at each shuttle stop.
+  - Trash bins, and ground signage (B-3).
+  - All of it is instanced, and placed with the same clearance rules as lamps.
+
+### 10.4 Quality tiers (D21)
+| Tier | Shown |
+|---|---|
+| 0 | Everything |
+| 1 | Everything, but flags wave at half rate and CCTV heads are static |
+| 2 | Buildings, signs, indicators, fence, booths, gantries and light masts. No flag motion, patrol car, CCTV motion or ground clutter (benches, bins, planters, barriers). |
+
+### 10.5 Budgets and non-functional
+- **Draw calls:** M5 adds at most 30 at tier 0. The existing limits stay: ≤ 300 on tier 0 and ≤ 150 on tier 2, in rain at night (§8.3). Signs share one atlas texture and material.
+- **Bundle:** ≤ 600 KB gzipped (currently 202 KB).
+- **Labels:** at most 10 DOM elements; positions every frame, text at 10 Hz.
+- **Accessibility (N-5):** labels are keyboard-focusable buttons with text status, and all motion stops with reduced motion.
+- **Unchanged:** N-1, N-7, and every M1–M4 requirement and test. Picking, cars and people are never hidden behind new props: nothing is placed inside a road corridor or bay.
+
+### 10.6 User stories
+- As a **viewer**, I open the hub and immediately read "GoldLane Rentals" on the terminal, follow "Rental Car Return →" from the entry gantry, and see the guard booth lift its boom for each returning car.
+- As an **ops manager**, I glance at the labels: "Express Wash · Busy · 2/2 busy · queue 5" in amber tells me where to look, and clicking it flies me there.
+- As an **ops manager** running "Wash tunnel down", the wash label turns red: "Offline · 1 offline".
+- As a **viewer** at night, the signs, pylon and light masts glow, and the security car's light bar flashes as it patrols the fence.
+
+### 10.7 Resolved (approved 2026-10-12: all proposed defaults accepted)
+- **Q1 Roof numbers on fleet cars.** **No** (they need a per-car texture atlas and a custom shader). The door stripe and mark carry the brand, and the ID shows on selection.
+- **Q2 Clicking a label.** **Flies the camera to the facility** (like the area switcher), without selecting a unit.
+- **Q3 Counter queue in the terminal label.** **Yes** (adds the read-only `counterQueue` to the snapshot).
+- **Q4 Labels switch.** **In the user menu, on by default**, remembered per browser.
+- **Q5 Sign texts.** **As in B-1.**
+
+## 11. M6: Airport context (OUTLINE 2026-10-12; detailed after M5)
+
+Decided now (D18–D21); the full spec, design and tests come after M5 is reviewed.
+- **Layout (D19):** airside to the north, beyond the Ready lot and gates (z > 200), with landside to the west and south. The map grows about 2×. Camera limits widen, and an **"Airport"** area joins the area switcher.
+- **Contents:**
+  - a passenger terminal with jet bridges, and a departures/arrivals curb road
+  - an air-traffic control tower with a rotating beacon
+  - a runway and taxiway, and parked jets at gates in fictional liveries (e.g. "Pacific Gateway Air", "Coastline")
+  - planes that land and take off on a fixed, deterministic schedule
+  - a multi-storey parking garage, an airport hotel, a cell-phone lot, a fuel farm and a cargo warehouse
+  - an elevated airport boulevard and overpass with palm-lined medians and background traffic
+  - an airside security fence, and an airport fire station with a red engine
+- **Flights are visual only (D20):** the simulation is unchanged. The "Flight bank lands" what-if also triggers a visible landing.
+- **Tiers (D21):** detail scales by tier, as in §10.4.

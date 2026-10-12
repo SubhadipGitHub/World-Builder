@@ -7,18 +7,21 @@ export interface LampPlacement {
   readonly z: number;
   /** Radians: the direction the lamp head reaches out over the road. */
   readonly heading: number;
-  readonly kind: 'street' | 'walkway' | 'flood';
+  /** 'mast': tall Ready-lot light masts (M5, SEC-3, G7). */
+  readonly kind: 'street' | 'walkway' | 'flood' | 'mast';
 }
 
-/** Spacing between lamps along a road side, metres (V-6). */
-export const LAMP_SPACING = 25;
+/** Spacing between lamps along a road side, metres (V-6; 25 m before the visual review). */
+export const LAMP_SPACING = 35;
 
 const MIN_GAP = 12;
 const CLEARANCE = 0.6;
 const KERB = 1.6;
 const MAIN_ROAD_SPEED = 9;
-/** Ready-lot floodlights on the medians between rows (unchanged from M1). */
-const FLOODS: readonly Vec2[] = [-4, 20.5, 42.5, 68].flatMap((x) => [100, 120, 140, 160].map((z) => ({ x, z })));
+/** Along main roads lamps alternate sides at this step (each side every 1.2 × LAMP_SPACING). */
+const MAIN_ROAD_STEP = LAMP_SPACING * 0.6;
+/** Ready-lot floodlights on the medians between rows: two per median (16 before the visual review). */
+const FLOODS: readonly Vec2[] = [-4, 20.5, 42.5, 68].flatMap((x) => [110, 150].map((z) => ({ x, z })));
 
 function distanceToEdge(p: Vec2, e: Edge): number {
   let best = Infinity;
@@ -46,8 +49,8 @@ let cached: readonly LampPlacement[] | null = null;
 
 /**
  * Roadside lamp positions generated from the lane graph (architecture §16, P4), deterministic:
- *  - 'street' lamps about every 25 m along each vehicle road, set just outside the road corridor;
- *    main roads (speed limit ≥ 9 m/s) get lamps on both sides
+ *  - 'street' lamps about every 35 m along each vehicle road, set just outside the road corridor;
+ *    main roads (speed limit ≥ 9 m/s) get lamps on both sides, alternating
  *  - 'walkway' lamps along pedestrian edges
  *  - 'flood' lamps on the medians of the Ready lot
  * Never inside any road corridor or building footprint (the lot surface excepted), never closer
@@ -133,14 +136,15 @@ export function lampPlacements(): readonly LampPlacement[] {
     .sort((a, b) => Number(b.speedLimit >= MAIN_ROAD_SPEED) - Number(a.speedLimit >= MAIN_ROAD_SPEED) || b.length - a.length || (a.id < b.id ? -1 : 1));
   for (const e of vehicle) {
     if (e.length < MIN_GAP) continue;
-    const both = e.speedLimit >= MAIN_ROAD_SPEED;
-    for (let s = LAMP_SPACING / 2; s < e.length; s += LAMP_SPACING) {
-      if (both) {
-        tryPlace(e, s, 1, 'street');
-        tryPlace(e, Math.min(e.length, s + LAMP_SPACING / 2), -1, 'street');
-      } else if (!tryPlace(e, s, 1, 'street')) {
-        tryPlace(e, s, -1, 'street');
+    if (e.speedLimit >= MAIN_ROAD_SPEED) {
+      // Main roads: a zig-zag, alternating sides, so each side has a lamp every 1.2 × spacing.
+      let side: 1 | -1 = 1;
+      for (let s = LAMP_SPACING / 2; s < e.length; s += MAIN_ROAD_STEP) {
+        tryPlace(e, s, side, 'street');
+        side = side === 1 ? -1 : 1;
       }
+    } else {
+      for (let s = LAMP_SPACING / 2; s < e.length; s += LAMP_SPACING) if (!tryPlace(e, s, 1, 'street')) tryPlace(e, s, -1, 'street');
     }
   }
 

@@ -1,6 +1,7 @@
 import { brand, type Tier } from '../config/brand';
 import { dimensions, energy, facility } from '../config/facility';
 import { idm, priority, rates as defaultRates } from '../config/rates';
+import { DEPARTURE_BACKLOG_PER_GATE, OUTAGE_KINDS, surge } from '../config/scenarios';
 import { weather as weatherTable, type WeatherMode } from '../config/weather';
 import { hub, hubGraph, type StationId, type UnitLayout } from '../layout/hub';
 import { createDataGen } from './datagen';
@@ -12,6 +13,17 @@ import { isParkedState, milestoneFor, TRACKER_STAGES, type TrackerStage, type Ve
 import { averageReadyEvSoc, averageTurnaroundMin, utilisation, type TurnaroundRecord } from './metrics';
 import { createResourcePool, type ResourcePool } from './resources';
 import { createRng } from './rng';
+import {
+  NORMAL_SCENARIO,
+  createUnitCatalogue,
+  durationFactor,
+  pickupFactor,
+  reduceScenario,
+  scenarioView,
+  tickScenario,
+  type ScenarioCommand,
+  type ScenarioView,
+} from './scenario';
 import { createTrafficEngine, type MoverSpec, type MoverView } from './traffic/engine';
 import type { AgentKind, Vec2, VehicleClass } from './types';
 
@@ -66,6 +78,8 @@ export interface ResourceView {
   readonly queueLength: number;
   /** Cycle progress in [0, 1] while working; null when idle. */
   readonly progress: number | null;
+  /** False while the unit is taken offline (S-2). */
+  readonly online: boolean;
 }
 
 export interface Snapshot {
@@ -77,6 +91,10 @@ export interface Snapshot {
   readonly timeScale: number;
   readonly agents: readonly AgentView[];
   readonly resources: readonly ResourceView[];
+  /** What-if levers in force (§9). */
+  readonly scenario: ScenarioView;
+  /** Customers waiting at the counter for a car (I-3); read-only. */
+  readonly counterQueue: number;
 }
 
 export interface Metrics {
@@ -95,7 +113,8 @@ export interface Metrics {
 
 export type Command =
   | { readonly type: 'setWeather'; readonly mode: WeatherMode }
-  | { readonly type: 'setTimeScale'; readonly value: number };
+  | { readonly type: 'setTimeScale'; readonly value: number }
+  | ScenarioCommand;
 
 export interface Sim {
   /** Advances one fixed step (rates.stepWallSec of wall time). */
@@ -253,6 +272,22 @@ export function createSim(config: SimConfig): Sim {
   const chargerKw = new Map<string, number>(hub.stations.charger.units.map((u) => [u.id, gen.chargeRateKw()]));
   const overflowing = new Set<Station>();
   const pending: PendingRelease[] = [];
+
+  // ---------- what-if scenario (§9, architecture §17) ----------
+
+  const catalogue = createUnitCatalogue(Object.fromEntries(OUTAGE_KINDS.map((k) => [k, hub.stations[k].units.map((u) => u.id)])));
+  let scenario = NORMAL_SCENARIO;
+
+  function applyScenario(command: ScenarioCommand): void {
+    const result = reduceScenario(scenario, command, { now, units: catalogue });
+    scenario = result.state;
+    for (const { unitId, online } of result.toggled) {
+      const kind = catalogue.kindOf(unitId);
+      if (kind) pool(kind).setOnline(unitId, online);
+    }
+    if (result.surgeStarted) rent.pullForward(surge.returns, now);
+    for (const e of result.events) emit(e);
+  }
 
   // ---------- agents ----------
 
@@ -441,13 +476,17 @@ export function createSim(config: SimConfig): Sim {
   }
 
   function serveCustomers(dtSim: number): void {
-    const arrivals = pickupArrivals(rng, r.pickupsPerSimHour, dtSim, weatherTable[weatherMode].demandFactor);
+    const arrivals = pickupArrivals(rng, r.pickupsPerSimHour, dtSim, weatherTable[weatherMode].demandFactor * pickupFactor(scenario, now));
     for (let i = 0; i < arrivals; i++) {
       const roll = rng.next();
       const cls: VehicleClass = roll < facility.fleetMix.ev ? 'ev' : roll < facility.fleetMix.ev + facility.fleetMix.suv ? 'suv' : 'sedan';
       customers.push({ cls, tier: gen.tier() });
     }
-    while (customers.length > 0) {
+    // Departure back-pressure (W11): past the backlog cap, customers wait at the counter.
+    const gates = hub.stations.gate.units.filter((u) => pool('gate').isOnline(u.id)).length;
+    let backlog = pedestrians.size;
+    for (const v of vehicles.values()) if (v.state === 'departing') backlog++;
+    while (customers.length > 0 && backlog < DEPARTURE_BACKLOG_PER_GATE * gates) {
       const c = customers[0] as Customer;
       const free = [...vehicles.values()].filter((v) => v.phase.kind === 'staged' && v.customerId === null);
       const car = free.find((v) => v.cls === c.cls) ?? free[0];
@@ -467,6 +506,7 @@ export function createSim(config: SimConfig): Sim {
         return;
       }
       customers.shift();
+      backlog++;
       car.customerId = pedId;
       car.tier = c.tier;
       pedestrians.set(pedId, car.id);
@@ -479,15 +519,15 @@ export function createSim(config: SimConfig): Sim {
       case 'returnLane':
         transition(v, 'inspecting');
         v.returnedAt = now;
-        v.phase = at(now + uniform(defaultRates.inspectionSimSec));
+        v.phase = at(now + uniform(defaultRates.inspectionSimSec) * durationFactor(scenario, 'inspection'));
         return;
       case 'wash':
         transition(v, 'washing');
-        v.phase = at(now + uniform(defaultRates.washSimSec));
+        v.phase = at(now + uniform(defaultRates.washSimSec) * durationFactor(scenario, 'wash'));
         return;
       case 'service':
         transition(v, 'inService');
-        v.phase = at(now + uniform(defaultRates.serviceSimSec));
+        v.phase = at(now + uniform(defaultRates.serviceSimSec) * durationFactor(scenario, 'service'));
         return;
       case 'charger':
       case 'pump':
@@ -555,7 +595,7 @@ export function createSim(config: SimConfig): Sim {
           // Severe path: detailed in the service bay (requirements L-1 severe; architecture §11 note).
           transition(v, 'washQueue');
           transition(v, 'washing');
-          v.phase = { kind: 'working', station, unitId, start: now, until: now + uniform(defaultRates.washSimSec), detailing: true };
+          v.phase = { kind: 'working', station, unitId, start: now, until: now + uniform(defaultRates.washSimSec) * durationFactor(scenario, 'service'), detailing: true };
           return;
         }
         transition(v, 'energyQueue');
@@ -823,6 +863,9 @@ export function createSim(config: SimConfig): Sim {
     const dtSim = dtWall * timeScale;
     tick++;
     now += dtSim;
+    const ticked = tickScenario(scenario, now);
+    scenario = ticked.state;
+    for (const e of ticked.events) emit(e);
     admitReturns();
     serveCustomers(dtSim);
     engine.step(dtWall, weatherTable[weatherMode].speedFactor);
@@ -999,7 +1042,7 @@ export function createSim(config: SimConfig): Sim {
             progress = Math.min(1, Math.max(0, (now - occ.phase.start) / (occ.phase.until - occ.phase.start)));
           }
         }
-        out.push({ id: u.id, kind: id, occupantId, queueLength, progress });
+        out.push({ id: u.id, kind: id, occupantId, queueLength, progress, online: pool(id).isOnline(u.id) });
       }
     }
     return out;
@@ -1016,7 +1059,7 @@ export function createSim(config: SimConfig): Sim {
     step,
     snapshot() {
       const hours = (((START_HOUR * 3600 + now) / 3600) % 24 + 24) % 24;
-      return { tick, simTimeSec: now, clockHours: hours, weather: weatherMode, timeScale, agents: agents(), resources: resources() };
+      return { tick, simTimeSec: now, clockHours: hours, weather: weatherMode, timeScale, agents: agents(), resources: resources(), scenario: scenarioView(scenario, now), counterQueue: 0 };
     },
     metrics() {
       const fleetOnMap = [...vehicles.values()].filter((v) => v.phase.kind !== 'offMap');
@@ -1034,7 +1077,8 @@ export function createSim(config: SimConfig): Sim {
     },
     apply(command) {
       if (command.type === 'setWeather') weatherMode = command.mode;
-      else timeScale = command.value;
+      else if (command.type === 'setTimeScale') timeScale = command.value;
+      else applyScenario(command);
     },
     drainEvents() {
       const out = events;

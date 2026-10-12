@@ -9,6 +9,20 @@ export interface DetailPanelProps {
   readonly snapshot: Snapshot | null;
   readonly throughput: ThroughputTracker;
   readonly onClose: () => void;
+  /**
+   * Offline toggle for outage-able units (S-8). Shows an "Offline" status row while the unit is
+   * offline, and a button "Take offline" / "Bring online". When `offlineReason` returns a reason,
+   * "Take offline" is disabled and the reason is shown.
+   */
+  readonly unitControl?: UnitControl;
+}
+
+export interface UnitControl {
+  /** Null if the unit may be taken offline, else the reason it may not (e.g. last unit). Null also for non-outage-able units, which get no button. */
+  offlineReason(unitId: string): string | null;
+  /** True for units that can have outages (lanes, bays, chargers, pumps, gates). */
+  isOutageable(unitId: string): boolean;
+  onSetOnline(unitId: string, online: boolean): void;
 }
 
 type Row = readonly [label: string, value: string];
@@ -74,7 +88,7 @@ function resourceContent(id: string, r: ResourceView | undefined, throughput: Th
  *  - A selected agent missing from the snapshot shows "Left the hub".
  *  - Close button labelled "Close details".
  */
-export function DetailPanel({ selection, snapshot, throughput, onClose }: DetailPanelProps): JSX.Element | null {
+export function DetailPanel({ selection, snapshot, throughput, onClose, unitControl }: DetailPanelProps): JSX.Element | null {
   if (selection === null) return null;
   let content: Content;
   if (selection.kind === 'agent') {
@@ -84,6 +98,10 @@ export function DetailPanel({ selection, snapshot, throughput, onClose }: Detail
     const r = snapshot?.resources.find((x) => x.id === selection.id);
     content = resourceContent(selection.id, r, throughput, snapshot?.simTimeSec ?? 0);
   }
+  const unitId = selection.kind === 'resource' ? selection.id : null;
+  const online = unitId === null ? true : (snapshot?.resources.find((x) => x.id === unitId)?.online ?? true);
+  const outage = unitId !== null && unitControl?.isOutageable(unitId) ? unitControl : null;
+  const reason = outage && unitId && online ? outage.offlineReason(unitId) : null;
   return (
     <section class="panel detail-panel" role="region" aria-label="Details">
       <header class="panel-header">
@@ -93,6 +111,7 @@ export function DetailPanel({ selection, snapshot, throughput, onClose }: Detail
         </button>
       </header>
       {content.note ? <p class="note">{content.note}</p> : null}
+      {!online ? <p class="status-badge offline">Offline</p> : null}
       <dl class="stats">
         {content.rows.map(([label, value]) => (
           <Fragment key={label}>
@@ -101,6 +120,20 @@ export function DetailPanel({ selection, snapshot, throughput, onClose }: Detail
           </Fragment>
         ))}
       </dl>
+      {outage && unitId ? (
+        <div class="unit-control">
+          <button
+            type="button"
+            disabled={reason !== null}
+            onClick={() => {
+              outage.onSetOnline(unitId, !online);
+            }}
+          >
+            {online ? 'Take offline' : 'Bring online'}
+          </button>
+          {reason ? <p class="note">{reason}</p> : null}
+        </div>
+      ) : null}
     </section>
   );
 }

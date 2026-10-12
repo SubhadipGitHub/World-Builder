@@ -1,3 +1,5 @@
+import type { ScenarioCommand, ScenarioView } from '../sim/scenario';
+import type { Metrics } from '../sim/world';
 import type { WeatherMode } from '../config/weather';
 import type { AreaId } from '../layout/hub';
 import type { Environment } from '../render/environment';
@@ -36,6 +38,22 @@ export interface HubTestHooks {
   lampsLit(): number;
   /** Test only: pins the quality tier (stops adaptive changes). */
   setQualityTier(tier: number): void;
+  /** Active what-if levers in the visible simulation (S-17). */
+  scenario(): ScenarioView;
+  /** Metrics of the shadow baseline simulation (S-11). */
+  baselineMetrics(): Metrics;
+  /** Sends a scenario command to the visible simulation, as the UI would. */
+  applyScenario(command: ScenarioCommand): void;
+  /** Sets the simulation speed (0 pause, 1–3). */
+  setSpeed(speed: number): void;
+  /** Simulated seconds of the visible and the baseline simulation (lockstep check). */
+  simTimes(): { readonly visible: number; readonly baseline: number };
+  /** Building labels currently shown (I-1): id, text content, state, and whether visible on screen. */
+  facilityLabels(): readonly { readonly id: string; readonly text: string; readonly state: string; readonly visible: boolean }[];
+  /** Boom arm openness, 0 down … 1 up (SEC-2). */
+  boomOpen(id: 'entry' | 'exit'): number;
+  /** Patrol car pose, or null when hidden (SEC-4). */
+  patrolPose(): { readonly x: number; readonly z: number } | null;
 }
 
 declare global {

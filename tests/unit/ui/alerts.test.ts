@@ -61,3 +61,36 @@ describe('createAlertFeed (D-8)', () => {
     expect(f.list()).toHaveLength(2);
   });
 });
+
+describe('createAlertFeed: scenario alerts (S-9)', () => {
+  it('logs lever changes as info alerts, with the unit to select', () => {
+    const f = createAlertFeed();
+    f.ingest([
+      { type: 'scenario', change: 'surgeStarted', simTimeSec: 1 },
+      { type: 'scenario', change: 'unitOffline', unitId: 'wash1', simTimeSec: 2 },
+      { type: 'scenario', change: 'crewChanged', station: 'wash', level: 'short', simTimeSec: 3 },
+      { type: 'scenario', change: 'crewChanged', station: 'service', level: 'extra', simTimeSec: 4 },
+      { type: 'scenario', change: 'crewChanged', station: 'inspection', level: 'normal', simTimeSec: 5 },
+      { type: 'scenario', change: 'rejected', unitId: 'wash2', simTimeSec: 6 },
+      { type: 'scenario', change: 'unitOnline', unitId: 'gate2', simTimeSec: 7 },
+      { type: 'scenario', change: 'surgeEnded', simTimeSec: 8 },
+      { type: 'scenario', change: 'reset', simTimeSec: 9 },
+    ]);
+    expect(f.list().map((a) => [a.severity, a.message, a.unitId, a.vehicleId])).toEqual([
+      ['info', 'Scenario reset to normal', null, null],
+      ['info', 'Surge ended', null, null],
+      ['info', 'Exit gate 2 back online', 'gate2', null],
+      ['info', 'Inspection crew: normal', null, null],
+      ['info', 'Service crew: extra crew', null, null],
+      ['info', 'Wash crew: short-staffed', null, null],
+      ['info', 'Wash bay 1 taken offline', 'wash1', null],
+      ['info', 'Surge: flight bank landed', null, null],
+    ]);
+  });
+
+  it('keeps unitId null on ordinary alerts', () => {
+    const f = createAlertFeed();
+    f.ingest([flagged('GL-PGW-00001', false, 10)]);
+    expect(f.list()[0]?.unitId).toBeNull();
+  });
+});

@@ -40,3 +40,14 @@ describe('detailStates (V-9, P9)', () => {
     expect(detailStates(towing).towBeacon).toBe(true);
   });
 });
+
+describe('detailStates: outages (S-2)', () => {
+  it('lists offline units for hazard cones', () => {
+    const snap = snapshot(
+      [],
+      [resource({ id: 'wash1', kind: 'wash', online: false }), resource({ id: 'wash2', kind: 'wash' }), resource({ id: 'gate2', kind: 'gate', online: false })],
+    );
+    expect([...detailStates(snap).offlineUnits]).toEqual(['wash1', 'gate2']);
+    expect(detailStates(snapshot()).offlineUnits.size).toBe(0);
+  });
+});

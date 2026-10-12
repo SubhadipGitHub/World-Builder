@@ -21,10 +21,23 @@ import { createSelectionRing } from '../render/selection';
 import { createSkyView, skyColours } from '../render/sky';
 import { buildWorld } from '../render/world';
 import type { Vec2 } from '../sim/types';
-import { createSim, type Snapshot } from '../sim/world';
+import type { ScenarioCommand } from '../sim/scenario';
+import { createSim, type Command, type Metrics, type Snapshot } from '../sim/world';
 import { createAlertFeed } from '../ui/alerts';
 import { formatClock, unitLabel } from '../ui/format';
-import { createKpiTracker } from '../ui/kpis';
+import { createKpiTracker, type KpiId } from '../ui/kpis';
+import type { Speed } from '../ui/m4/SpeedControl';
+import {
+  createWeatherMemory,
+  deltaVisible,
+  isOutageable,
+  kpiDelta,
+  offlineReason,
+  outageGroups,
+  presetCommands,
+  queueSummary,
+  type KpiDelta,
+} from '../ui/scenario';
 import { Dashboard, type DashboardData, type Settings, type TableData } from '../ui/m2/Dashboard';
 import { createUiStore } from '../ui/store';
 import '../ui/styles.css';
@@ -34,6 +47,7 @@ import { createThroughputTracker } from '../ui/throughput';
 import { createTimeline } from '../ui/timeline';
 import { createAccumulator } from './loop';
 import type { HubTestHooks } from './testHooks';
+import { notImplemented } from '../shared/notImplemented';
 import { hasWebGL2 } from './webgl';
 
 const CLICK_MAX_MOVE_PX = 5;
@@ -73,6 +87,10 @@ function start(root: HTMLElement): void {
   const paletteFor = (t: Theme) => (t === 'light' ? lightPalette : darkPalette);
 
   const sim = createSim({ seed: 'goldlane' });
+  // Shadow baseline (S-11, W7): same seed, same weather and speed, never any scenario lever.
+  const baseline = createSim({ seed: 'goldlane' });
+  const weatherMemory = createWeatherMemory();
+  const outages = outageGroups();
   const store = createUiStore();
   const throughput = createThroughputTracker();
   const timeline = createTimeline();
@@ -144,6 +162,21 @@ function start(root: HTMLElement): void {
 
   const clockAt = (t: number): string => formatClock((((curr.clockHours + (t - curr.simTimeSec) / 3600) % 24) + 24) % 24);
 
+  let baselineMetrics: Metrics = baseline.metrics();
+  let baselineQueues = queueSummary(baseline.snapshot());
+  const kpiValues = (m: Metrics): Readonly<Record<KpiId, number | null>> => ({ turnaround: m.turnaroundMin, utilisation: m.utilisation * 100, evSoc: m.readyEvSocPct });
+  /** Deltas against the baseline while a scenario is relevant (S-12). */
+  const kpiDeltas = (m: Metrics): Partial<Record<KpiId, KpiDelta | null>> => {
+    if (!deltaVisible(curr.scenario, curr.simTimeSec)) return {};
+    const now = kpiValues(m);
+    const base = kpiValues(baselineMetrics);
+    return {
+      turnaround: kpiDelta('turnaround', now.turnaround, base.turnaround),
+      utilisation: kpiDelta('utilisation', now.utilisation, base.utilisation),
+      evSoc: kpiDelta('evSoc', now.evSoc, base.evSoc),
+    };
+  };
+
   const dashboardData = (): DashboardData => {
     const sel = store.selection.value;
     const metrics = sim.metrics();
@@ -154,13 +187,41 @@ function start(root: HTMLElement): void {
       unread: alertFeed.unread(),
       steps: sel?.kind === 'agent' && curr.agents.some((a) => a.id === sel.id && a.kind === 'fleet') ? timeline.stepsFor(sel.id) : null,
       stageCounts: metrics.stageCounts,
+      deltas: kpiDeltas(metrics),
+      // M5: wired in Stage 4.
+      facilities: [],
+      compactLabels: false,
+      queues: queueSummary(curr),
+      baselineQueues,
     };
   };
   const tableData = (): TableData => ({ fleet: fleetRows(curr), queue: queueRows(curr), checkouts: checkoutLog.rows() });
 
   const data = signal<DashboardData>(dashboardData());
   const tables = signal<TableData>(tableData());
-  const settings = signal<Settings>({ weather: weatherMode, dayNight, theme });
+  const settings = signal<Settings>({ weather: weatherMode, dayNight, theme, speed: 1, labels: true });
+
+  // ---------- what-if commands (§9, W8) ----------
+
+  let speed: Speed = 1;
+  /** Applies commands to the visible simulation only, then shows their effect at once (even while paused). */
+  const applyVisible = (commands: readonly Command[]): void => {
+    for (const c of commands) sim.apply(c);
+    const events = sim.drainEvents();
+    timeline.ingest(events);
+    alertFeed.ingest(events);
+    checkoutLog.ingest(events);
+    // Same tick, so agents are unchanged: only the scenario view and unit flags differ.
+    curr = sim.snapshot();
+    data.value = dashboardData();
+  };
+  const setVisibleWeather = (mode: WeatherMode): void => {
+    weatherMode = mode;
+    settings.value = { ...settings.value, weather: mode };
+  };
+  const scenarioCommand = (command: ScenarioCommand): void => {
+    applyVisible([command]);
+  };
 
   const onArea = (id: AreaId): void => {
     // Switching area deselects, so "following ⇔ selected" stays true (architecture §14.1).
@@ -181,6 +242,9 @@ function start(root: HTMLElement): void {
       clockAt,
       onArea,
       onWeather: (mode: WeatherMode) => {
+        // A manual choice goes to both simulations, and wins over a preset's weather (W8).
+        weatherMemory.onManualWeather();
+        baseline.apply({ type: 'setWeather', mode });
         weatherMode = mode;
         sim.apply({ type: 'setWeather', mode });
         settings.value = { ...settings.value, weather: mode };
@@ -205,6 +269,47 @@ function start(root: HTMLElement): void {
       },
       onSelectVehicle: (id: string) => {
         store.select({ kind: 'agent', id });
+      },
+      onLabels: (on: boolean) => notImplemented(on),
+      onFacility: (id) => notImplemented(id),
+      onSelectUnit: (id: string) => {
+        store.select({ kind: 'resource', id });
+      },
+      scenario: {
+        outages,
+        offlineReason: (unitId: string) => offlineReason(curr.scenario, unitId),
+        isOutageable,
+        onSurge: () => {
+          scenarioCommand({ type: 'surge' });
+        },
+        onCrew: (station, level) => {
+          scenarioCommand({ type: 'setCrew', station, level });
+        },
+        onSetOnline: (unitId, online) => {
+          scenarioCommand({ type: 'setUnitOnline', unitId, online });
+        },
+        onPreset: (id) => {
+          const plan = presetCommands(id);
+          weatherMemory.onPreset(weatherMode, plan.weather);
+          const commands: Command[] = [...plan.commands];
+          if (plan.weather) {
+            commands.push({ type: 'setWeather', mode: plan.weather });
+            setVisibleWeather(plan.weather);
+          }
+          applyVisible(commands);
+        },
+        onReset: () => {
+          const restore = weatherMemory.takeRestore();
+          const commands: Command[] = [{ type: 'resetScenario' }];
+          if (restore) {
+            commands.push({ type: 'setWeather', mode: restore });
+            setVisibleWeather(restore);
+          }
+          applyVisible(commands);
+        },
+        onSpeed: (value) => {
+          setSpeed(value);
+        },
       },
     }),
     uiRoot,
@@ -297,7 +402,14 @@ function start(root: HTMLElement): void {
 
   // ---------- loop (A3) ----------
 
-  const accumulator = createAccumulator(rates.stepWallSec, 5);
+  let accumulator = createAccumulator(rates.stepWallSec, 5);
+  /** Speed = steps per tick for both simulations (S-19, W9); the step cap grows with it. */
+  function setSpeed(value: Speed): void {
+    if (value === speed) return;
+    speed = value;
+    accumulator = createAccumulator(rates.stepWallSec, 5 * Math.max(1, value));
+    settings.value = { ...settings.value, speed: value };
+  }
   let last = performance.now();
   let panelClock = 0;
   let tableClock = 0;
@@ -321,8 +433,11 @@ function start(root: HTMLElement): void {
       applyQuality(tier);
     }
 
-    const { steps, alpha } = accumulator.push(dt);
+    const { steps, alpha } = accumulator.push(dt * speed);
     if (steps > 0) {
+      // Lockstep: the baseline takes exactly the same steps (S-20).
+      for (let i = 0; i < steps; i++) baseline.step();
+      baseline.drainEvents();
       for (let i = 0; i < steps - 1; i++) sim.step();
       prev = steps > 1 ? sim.snapshot() : curr;
       sim.step();
@@ -376,6 +491,8 @@ function start(root: HTMLElement): void {
       panelClock = 0;
       kpis.observe(sim.metrics(), curr.simTimeSec);
       alertFeed.observeSnapshot(curr, rates.evStageSocPct);
+      baselineMetrics = baseline.metrics();
+      baselineQueues = queueSummary(baseline.snapshot());
       data.value = dashboardData();
     }
     if (tableClock >= TABLE_REFRESH_SEC) {
@@ -419,6 +536,17 @@ function start(root: HTMLElement): void {
         qualityTier = tier;
         applyQuality(tier);
       },
+      scenario: () => curr.scenario,
+      baselineMetrics: () => baseline.metrics(),
+      applyScenario: scenarioCommand,
+      setSpeed(value) {
+        if (value === 0 || value === 1 || value === 2 || value === 3) setSpeed(value);
+      },
+      simTimes: () => ({ visible: sim.snapshot().simTimeSec, baseline: baseline.snapshot().simTimeSec }),
+      // M5 hooks: wired in Stage 4.
+      facilityLabels: () => notImplemented(),
+      boomOpen: (id) => notImplemented(id),
+      patrolPose: () => notImplemented(),
     };
     window.__hub = hooks;
   }

@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { brand } from '../../../../src/config/brand';
 import { dimensions } from '../../../../src/config/facility';
 import { vehicleAsset, type VehicleAssetKind } from '../../../../src/render/assets/vehicles';
 import { triangleCount } from '../../../../src/render/kit/assemble';
 import { darkPalette } from '../../../../src/render/palette';
-import { colours, extent, positions } from '../kit/helpers';
+import { colours, extent, positions, rgb } from '../kit/helpers';
 
 const HEIGHTS: Readonly<Record<VehicleAssetKind, readonly [number, number]>> = {
   sedan: [1.25, 1.7],
@@ -72,4 +73,28 @@ describe('vehicleAsset: parts (V-2, P2)', () => {
     expect(h('suv') - h('sedan')).toBeGreaterThanOrEqual(0.15);
     expect(Math.abs(h('ev') - h('sedan'))).toBeGreaterThanOrEqual(0.05);
   });
+});
+
+describe('vehicleAsset: fleet livery (B-4, G11)', () => {
+  const gold = rgb(brand.colors.accent);
+  const isGold = (c: [number, number, number]): boolean => c.every((v, i) => Math.abs(v - (gold[i] ?? 0)) < 1e-3);
+
+  for (const kind of ['sedan', 'suv', 'ev'] as const) {
+    it(`${kind} carries a gold GoldLane stripe on both sides, in the untinted trim`, () => {
+      const a = vehicleAsset(kind, darkPalette);
+      const ps = positions(a.trim);
+      const goldPts = colours(a.trim)
+        .map((c, i) => (isGold(c) ? ps[i] : undefined))
+        .filter((p): p is [number, number, number] => p !== undefined);
+      const halfW = dimensions[kind].width / 2;
+      expect(goldPts.some((p) => p[2] > 0.8 * halfW)).toBe(true);
+      expect(goldPts.some((p) => p[2] < -0.8 * halfW)).toBe(true);
+      // Door height, not roof or wheels.
+      for (const p of goldPts) {
+        expect(p[1]).toBeGreaterThan(0.3);
+        expect(p[1]).toBeLessThan(1.3);
+      }
+      expect(colours(a.paint).some(isGold)).toBe(false);
+    });
+  }
 });

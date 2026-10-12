@@ -13,6 +13,7 @@ import {
   type Raycaster,
 } from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { OUTAGE_KINDS } from '../config/scenarios';
 import { hub } from '../layout/hub';
 import { unitMarker, unitPose, type Pose } from '../layout/positions';
 import { buildingAsset } from './assets/buildings';
@@ -81,6 +82,22 @@ const chargerPillar = (): BufferGeometry =>
     place(paint(roundedBox(0.05, 0.42, 0.42, 0.03, 1), '#1F2A3A'), { x: 0.28, y: 1.2 }),
     place(paint(cylinder(0.04, 0.04, 1.1, 6), '#2A2C33'), { x: 0.3, y: 0.6, z: 0.24, rotZ: 0.5 }),
   ]);
+/** Traffic cone with a white reflective band (S-2 outages). */
+const cone = (): BufferGeometry =>
+  assemble([
+    place(paint(roundedBox(0.5, 0.06, 0.5, 0.02, 1), '#E8571E'), { y: 0.03 }),
+    place(paint(cylinder(0.05, 0.2, 0.62, 10), '#F26A21'), { y: 0.37 }),
+    place(paint(cylinder(0.105, 0.135, 0.12, 10), '#F4F4F2'), { y: 0.42 }),
+  ]);
+const warningLight = (): BufferGeometry => place(cylinder(0.07, 0.07, 0.09, 8), { y: 0.73 });
+/** Three cones across the entry of an offline bay, behind its parking spot (outside the wash tunnel). */
+const CONE_LATERAL = [-1.4, 0, 1.4];
+const CONE_BEHIND = 3.2;
+/** Chunky, toy-like cones read better from the hub camera's height. */
+const CONE_SCALE = new Vector3(1.4, 1.4, 1.4);
+/** Wash bays sit inside the tunnel: their cones stand just outside its entrance instead. */
+const WASH_ENTRY_GAP = 1.5;
+
 const statusLight = (): BufferGeometry => place(roundedBox(0.06, 0.12, 0.3, 0.03, 1), { x: 0.29, y: 1.55 });
 
 const pumpIsland = (): BufferGeometry =>
@@ -163,6 +180,43 @@ export function buildWorld(palette: Palette): WorldHandle {
   });
   hit.computeBoundingSphere();
 
+  // Outages (S-2): cones and a flashing red light, shown only for offline units.
+  const washHall = hub.buildings.find((b) => b.id === 'wash');
+  const outageIds = OUTAGE_KINDS.flatMap((k) => hub.stations[k].units.map((u) => u.id));
+  const cones = new InstancedMesh(cone(), equipMat, outageIds.length * CONE_LATERAL.length);
+  const warnMat = new MeshBasicMaterial({ color: '#FF2A1F', toneMapped: false });
+  const warnings = new InstancedMesh(warningLight(), warnMat, outageIds.length);
+  cones.count = 0;
+  warnings.count = 0;
+  cones.castShadow = true;
+  let offlineKey = '';
+  const at = new Vector3();
+  const placeCones = (offline: ReadonlySet<string>): void => {
+    const ids = outageIds.filter((id) => offline.has(id));
+    const key = ids.join(',');
+    if (key === offlineKey) return;
+    offlineKey = key;
+    let n = 0;
+    ids.forEach((id, i) => {
+      const p = unitPose(id);
+      const back = washIds.includes(id) && washHall
+        ? { x: washHall.x - washHall.width / 2 - WASH_ENTRY_GAP, z: p.z }
+        : { x: p.x - Math.cos(p.heading) * CONE_BEHIND, z: p.z - Math.sin(p.heading) * CONE_BEHIND };
+      q.setFromAxisAngle(UP, -p.heading);
+      for (const lateral of CONE_LATERAL) {
+        at.set(back.x - Math.sin(p.heading) * lateral, 0, back.z + Math.cos(p.heading) * lateral);
+        cones.setMatrixAt(n++, tmp.compose(at, q, CONE_SCALE));
+        if (lateral === 0) warnings.setMatrixAt(i, tmp.compose(at, q, CONE_SCALE));
+      }
+    });
+    cones.count = n;
+    warnings.count = ids.length;
+    cones.instanceMatrix.needsUpdate = true;
+    warnings.instanceMatrix.needsUpdate = true;
+    cones.computeBoundingSphere();
+    warnings.computeBoundingSphere();
+  };
+
   // Live details (V-9): two brushes per wash bay, a roll-up door per service bay, an arm per gate.
   const washIds = hub.stations.wash.units.map((u) => u.id);
   const brushPoses = washIds.flatMap((id) => [-1.45, 1.45].map((side) => ({ ...unitPose(id), side })));
@@ -206,7 +260,7 @@ export function buildWorld(palette: Palette): WorldHandle {
   };
   placeDetails();
 
-  group.add(landscape.group, solid, glass, glow, chargers, status, pumps, bollards, hit, brushes, doors, arms, lampsView.group);
+  group.add(landscape.group, solid, glass, glow, chargers, status, pumps, bollards, hit, brushes, doors, arms, cones, warnings, lampsView.group);
 
   let night = 0;
   let lampsLit = 0;
@@ -245,6 +299,9 @@ export function buildWorld(palette: Palette): WorldHandle {
         status.setColorAt(i, colour.set(charging ? '#3BE37A' : '#7FA8FF').multiplyScalar(charging ? 1.6 + 0.6 * night : 0.6));
       });
       if (status.instanceColor) status.instanceColor.needsUpdate = true;
+      placeCones(frame.details.offlineUnits);
+      const flash = frame.reducedMotion || Math.sin(frame.wallTime * 6) > 0;
+      warnMat.color.set('#FF2A1F').multiplyScalar(flash ? 1.4 + night : 0.25);
       lampsLit = lampsView.update({ night, wallTime: frame.wallTime, reducedMotion: frame.reducedMotion, poolFraction: frame.poolFraction });
     },
     lampsLit: () => lampsLit,
