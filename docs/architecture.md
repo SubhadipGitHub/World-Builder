@@ -650,7 +650,7 @@ src/app/main.ts             baseline sim, speed, routing of commands, hooks
 - **Production bundle:** 202.3 KB gzipped (budget 600 KB), with no test hooks.
 - **Screenshots for review:** the drawer with the Wash tunnel down preset, top-bar chips and speed, KPI "≈ normal" delta lines, Wash bay 1 offline with its badge, cones and "Bring online", and the phone bottom sheet.
 
-## 18. M5: branding, building indicators and hub security (design approved 2026-10-12)
+## 18. M5: branding, building indicators and hub security (design approved 2026-10-12; implemented, awaiting review)
 
 Implements requirements §10 (B-1…B-4, I-1…I-4, SEC-1…SEC-4, ENV-1, D17–D21). Render and UI only, plus one read-only snapshot field (`counterQueue`). There are no simulation behaviour changes, no asset files, and it is still one offline file.
 
@@ -780,3 +780,32 @@ src/app/main.ts            site view, labels, hooks
   - 6 E2E tests (`tests/e2e/m5.spec.ts`).
 - **Existing suites:** the other 413 unit tests pass. Fixtures were updated for `counterQueue` and the TopBar labels props.
 - **Plan detail fixed by the tests:** only the entry and exit roads leave the hub to the west (the shuttle loop turns back inside), so there are 2 road extensions and 2 fence openings.
+
+### 18.8 Implementation notes (Stage 4, 2026-10-12)
+- **Modules as built:**
+  - `render/site/signs.ts`: text quads, boards and atlas entries
+  - `render/site/anim.ts`: pure animation helpers
+  - `render/site.ts`: the composition
+  - Security, props and patrol live in `render/site.ts` rather than separate files; it stays under 400 lines.
+  - `layout/geometry.ts` is shared by lamps, the site plan and planting; landscape and lamps dropped their copies of `distanceToEdge`.
+- **New kit shape `slab(w, h, d)`** (a plain 12-triangle box, with a test) for decals and thin panels. The rounded-box livery pushed the SUV over its 2,500-triangle budget; slabs keep it inside.
+- **Labels hide behind dashboard panels.** `declutter(rects, blockers)` treats panel rectangles as already taken (found by E2E: the Fuel label sat under the live table and couldn't be clicked). Unit-tested.
+- **Light masts** are the 4 `'mast'` lamps (G7): tried at the Ready lot's corners, then along its sides, 4 m outside the surface.
+- **Fixed during the screenshot review:** sign boards were placed in front of their text (the normal was derived from the text's right vector with the wrong sign). Boards now sit behind.
+- **Two Stage 3 test-data errors corrected:**
+  - an atlas test entry wider than the 1024 px test atlas
+  - the terminal "OK at 3 waiting" case, which contradicted rule I-2; the spec wins, so 3 waiting is Busy
+- **E2E:** the wash-offline test checks the label's accessible name, because labels are compact (no detail line) at the overview zoom by design. The label-click test starts at the EV area, so the Fuel label is clear of the panels.
+
+### 18.9 Verified results (2026-10-12)
+- **Checks:** typecheck and lint are clean. 471 unit tests, 16 soak runs and 33 E2E tests (M1–M5 and the dev server) pass.
+- **Production bundle:** 211.2 KB gzipped (budget 600 KB), with no test hooks.
+- **Draw calls at 1280 × 800** (M5 adds about 20, budget 30):
+
+| Setting | Before M5 | With M5 | Limit |
+|---|---|---|---|
+| Tier 0, day | 77 | 97 | — |
+| Tier 0, night with rain and bloom | 94 | 114 | 300 |
+| Tier 2 | 48 | 62 | 150 |
+
+- **Screenshots for review:** overview labels (compact), the return canopy with its full label, the entrance (pylon, flags, booth with boom, barriers, RETURN, gantry, fence) by day and night, and night overview signs.

@@ -5,7 +5,7 @@ import { ATLAS_PAD, packAtlas, type AtlasEntry } from '../../../../src/render/te
 
 const measure = (text: string, px: number): number => Math.round(text.length * px * 0.6);
 const entries: AtlasEntry[] = [
-  { text: 'GoldLane Rentals', px: 128 },
+  { text: 'GoldLane Rentals', px: 96 },
   { text: 'Rental Car Return', px: 64 },
   { text: 'Express Wash', px: 64 },
   { text: 'Fuel', px: 64 },

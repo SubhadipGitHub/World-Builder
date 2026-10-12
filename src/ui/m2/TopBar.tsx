@@ -270,6 +270,17 @@ export function TopBar(props: TopBarProps): JSX.Element {
               >
                 Light theme
               </button>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={props.labelsOn ? 'true' : 'false'}
+                class="switch"
+                onClick={() => {
+                  props.onLabels(!props.labelsOn);
+                }}
+              >
+                Building labels
+              </button>
             </div>
           ) : null}
         </div>

@@ -1,6 +1,5 @@
 import { brand } from '../config/brand';
 import type { StationId } from '../layout/hub';
-import { notImplemented } from '../shared/notImplemented';
 import type { Snapshot } from '../sim/world';
 
 // Building indicators (requirements I-1…I-4, architecture §18 G8). Pure.
@@ -54,7 +53,27 @@ export interface FacilityStatus {
 
 /** Live status of every facility, in FACILITIES order (I-1, I-2, I-3). */
 export function facilityStatuses(snapshot: Snapshot): readonly FacilityStatus[] {
-  return notImplemented(snapshot);
+  return FACILITIES.map((f): FacilityStatus => {
+    if (f.id === 'terminal') {
+      const queue = snapshot.counterQueue;
+      return { id: f.id, name: f.name, state: queue >= BUSY_QUEUE ? 'busy' : 'ok', busy: 0, total: 0, queue, offline: 0, detail: `Counter: ${String(queue)} waiting` };
+    }
+    const units = snapshot.resources.filter((r) => (f.stations as readonly string[]).includes(r.kind));
+    const queue = units.reduce((m, r) => Math.max(m, r.queueLength), 0);
+    if (f.id === 'lot') {
+      const busy = units.filter((r) => r.occupantId !== null).length;
+      const total = units.length;
+      const state = total > 0 && busy === total ? 'busy' : 'ok';
+      return { id: f.id, name: f.name, state, busy, total, queue, offline: 0, detail: `${String(busy)}/${String(total)} staged` };
+    }
+    const online = units.filter((r) => r.online);
+    const offline = units.length - online.length;
+    const busy = online.filter((r) => r.occupantId !== null).length;
+    const total = online.length;
+    const state: FacilityState = offline > 0 ? 'offline' : (total > 0 && busy === total) || queue >= BUSY_QUEUE ? 'busy' : 'ok';
+    const detail = `${offline > 0 ? `${String(offline)} offline · ` : ''}${String(busy)}/${String(total)} busy · queue ${String(queue)}`;
+    return { id: f.id, name: f.name, state, busy, total, queue, offline, detail };
+  });
 }
 
 /** Status word shown next to the dot. */
@@ -62,7 +81,8 @@ export const STATE_LABEL: Readonly<Record<FacilityState, string>> = { ok: 'OK', 
 
 /** Accessible name, e.g. "Express Wash, Busy, 2 of 2 busy, queue 4". */
 export function labelName(status: FacilityStatus): string {
-  return notImplemented(status);
+  const words = status.detail.replace(/(\d+)\/(\d+)/g, '$1 of $2').split(' · ').join(', ');
+  return `${status.name}, ${STATE_LABEL[status.state]}, ${words}`;
 }
 
 export interface LabelRect {
@@ -75,7 +95,24 @@ export interface LabelRect {
   readonly h: number;
 }
 
-/** Ids to show: higher priority first (ties by FACILITIES order); a label overlapping a shown one hides. */
-export function declutter(rects: readonly LabelRect[]): ReadonlySet<FacilityId> {
-  return notImplemented(rects);
+export interface ScreenRect {
+  readonly x: number;
+  readonly y: number;
+  readonly w: number;
+  readonly h: number;
+}
+
+/**
+ * Ids to show: higher priority first (ties by FACILITIES order); a label overlapping a shown one,
+ * or any blocker (a dashboard panel), hides.
+ */
+export function declutter(rects: readonly LabelRect[], blockers: readonly ScreenRect[] = []): ReadonlySet<FacilityId> {
+  const order = (id: FacilityId): number => FACILITIES.findIndex((f) => f.id === id);
+  const sorted = [...rects].sort((a, b) => b.priority - a.priority || order(a.id) - order(b.id));
+  const overlaps = (a: ScreenRect, b: ScreenRect): boolean => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+  const shown: LabelRect[] = [];
+  for (const r of sorted) {
+    if (!blockers.some((b) => overlaps(r, b)) && !shown.some((s) => overlaps(r, s))) shown.push(r);
+  }
+  return new Set(shown.map((r) => r.id));
 }

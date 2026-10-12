@@ -13,10 +13,11 @@ import {
   Vector3,
 } from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { distanceToEdge } from '../layout/geometry';
 import { hub, hubGraph } from '../layout/hub';
 import { lampPlacements } from '../layout/lamps';
 import { hubBounds } from '../layout/positions';
-import type { Edge } from '../sim/graph/laneGraph';
+import { sitePlan } from '../layout/site';
 import { createRng } from '../sim/rng';
 import type { Vec2 } from '../sim/types';
 import { assemble, paint, place } from './kit/assemble';
@@ -113,6 +114,17 @@ function roads(): { asphalt: BufferGeometry; shoulder: BufferGeometry; walkway: 
       }
     }
   }
+  // Public roads continue west through the fence towards Airport Blvd (M5, G1).
+  for (const ext of sitePlan().roadExtensions) {
+    const pts = [
+      { x: ext.fromX, z: ext.z },
+      { x: ext.toX, z: ext.z },
+    ];
+    const w = Math.max(ext.width, 3) + 0.8;
+    asphalt.push(ribbon(pts, w, 0.03));
+    shoulder.push(ribbon(pts, w + 2.2, 0.015));
+    for (const side of [1, -1]) lines.push(ribbon(pts, 0.14, 0.04, side * (w / 2 - 0.35)));
+  }
   return { asphalt: merged(asphalt), shoulder: merged(shoulder), walkway: merged(walkway), lines: merged(lines) };
 }
 
@@ -178,31 +190,30 @@ function bush(): BufferGeometry {
   return assemble([place(paint(blob(0.9, 1), '#5A9C4C'), { y: 0.55, scale: [1, 0.72, 1] }), place(paint(blob(0.6, 1), '#6AAE58'), { y: 0.75, x: 0.5, z: 0.2 })]);
 }
 
-function distanceToEdge(p: Vec2, e: Edge): number {
-  let best = Infinity;
-  const pts = e.path.points;
-  for (let i = 1; i < pts.length; i++) {
-    const a = pts[i - 1] as Vec2;
-    const b = pts[i] as Vec2;
-    const dx = b.x - a.x;
-    const dz = b.z - a.z;
-    const len2 = dx * dx + dz * dz || 1;
-    const t = Math.min(1, Math.max(0, ((p.x - a.x) * dx + (p.z - a.z) * dz) / len2));
-    best = Math.min(best, Math.hypot(p.x - (a.x + dx * t), p.z - (a.z + dz * t)));
-  }
-  return best;
-}
-
 /** Deterministic planting that keeps clear of roads, buildings, the lot and lamps. */
 function plant(): { round: Matrix4[]; conifer: Matrix4[]; palm: Matrix4[]; bush: Matrix4[] } {
   const rng = createRng('goldlane-trees');
   const edges = hubGraph().edges;
   const lamps = lampPlacements();
+  // Keep trees off the M5 site items (signs, booths, cameras, props, flags, the pylon).
+  const site = sitePlan();
+  const sitePoints: Vec2[] = [
+    site.pylon,
+    ...site.flags,
+    ...site.booths.map((x) => x.pose),
+    ...site.directionSigns,
+    ...site.cctv,
+    ...site.callBoxes,
+    ...site.bollards,
+    ...site.props.map((x) => x.pose),
+    ...site.gantries.flatMap((g) => [1, -1].map((side) => ({ x: g.x - Math.sin(g.heading) * side * (g.span / 2), z: g.z + Math.cos(g.heading) * side * (g.span / 2) }))),
+  ];
   const b = hubBounds(10);
   const out = { round: [] as Matrix4[], conifer: [] as Matrix4[], palm: [] as Matrix4[], bush: [] as Matrix4[] };
   const free = (p: Vec2, clearance: number): boolean => {
     for (const bl of hub.buildings) if (Math.abs(p.x - bl.x) < bl.width / 2 + clearance && Math.abs(p.z - bl.z) < bl.depth / 2 + clearance) return false;
     for (const l of lamps) if (Math.hypot(l.x - p.x, l.z - p.z) < 3) return false;
+    for (const q of sitePoints) if (Math.hypot(q.x - p.x, q.z - p.z) < 2.5 + clearance) return false;
     for (const e of edges) if (distanceToEdge(p, e) < e.width / 2 + 2.2 + clearance) return false;
     return true;
   };

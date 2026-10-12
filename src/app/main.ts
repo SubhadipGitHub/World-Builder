@@ -3,7 +3,7 @@ import { h, render } from 'preact';
 import { Raycaster, Vector2, Vector3 } from 'three';
 import { rates } from '../config/rates';
 import type { WeatherMode } from '../config/weather';
-import type { AreaId } from '../layout/hub';
+import { hub, type AreaId } from '../layout/hub';
 import { areaById, hubBounds, unitMarker, unitPose } from '../layout/positions';
 import { createAgentLayer } from '../render/agents';
 import { createAtmosphere } from '../render/atmosphere';
@@ -18,6 +18,7 @@ import { createQualityController, settingsFor } from '../render/quality';
 import { createRain } from '../render/rain';
 import { createScene } from '../render/scene';
 import { createSelectionRing } from '../render/selection';
+import { createSiteView } from '../render/site';
 import { createSkyView, skyColours } from '../render/sky';
 import { buildWorld } from '../render/world';
 import type { Vec2 } from '../sim/types';
@@ -25,7 +26,9 @@ import type { ScenarioCommand } from '../sim/scenario';
 import { createSim, type Command, type Metrics, type Snapshot } from '../sim/world';
 import { createAlertFeed } from '../ui/alerts';
 import { formatClock, unitLabel } from '../ui/format';
+import { COMPACT_DISTANCE, FACILITIES, declutter, facilityStatuses, type FacilityId, type FacilityStatus } from '../ui/facilities';
 import { createKpiTracker, type KpiId } from '../ui/kpis';
+import { LABELS_KEY, loadFlag, saveFlag } from '../ui/prefs';
 import type { Speed } from '../ui/m4/SpeedControl';
 import {
   createWeatherMemory,
@@ -47,7 +50,6 @@ import { createThroughputTracker } from '../ui/throughput';
 import { createTimeline } from '../ui/timeline';
 import { createAccumulator } from './loop';
 import type { HubTestHooks } from './testHooks';
-import { notImplemented } from '../shared/notImplemented';
 import { hasWebGL2 } from './webgl';
 
 const CLICK_MAX_MOVE_PX = 5;
@@ -106,7 +108,8 @@ function start(root: HTMLElement): void {
   const ring = createSelectionRing(paletteFor(theme));
   const rain = createRain();
   const sky = createSkyView();
-  scene.add(sky.group, world.group, agents.group, ring.mesh, rain.mesh);
+  const site = createSiteView(paletteFor(theme));
+  scene.add(sky.group, site.group, world.group, agents.group, ring.mesh, rain.mesh);
   const atmosphere = createAtmosphere({ renderer, scene, hemi, sun, world, agents, rain }, paletteFor(theme));
   atmosphere.setPalette(paletteFor(theme));
   const post = createPostPipeline(renderer, scene, camera);
@@ -188,18 +191,18 @@ function start(root: HTMLElement): void {
       steps: sel?.kind === 'agent' && curr.agents.some((a) => a.id === sel.id && a.kind === 'fleet') ? timeline.stepsFor(sel.id) : null,
       stageCounts: metrics.stageCounts,
       deltas: kpiDeltas(metrics),
-      // M5: wired in Stage 4.
-      facilities: [],
-      compactLabels: false,
+      facilities: settings.value.labels ? facilityStatuses(curr) : [],
+      compactLabels: rig.state().distance > COMPACT_DISTANCE,
       queues: queueSummary(curr),
       baselineQueues,
     };
   };
   const tableData = (): TableData => ({ fleet: fleetRows(curr), queue: queueRows(curr), checkouts: checkoutLog.rows() });
 
+  // Settings first: dashboardData() reads the labels switch.
+  const settings = signal<Settings>({ weather: weatherMode, dayNight, theme, speed: 1, labels: loadFlag(storage, LABELS_KEY, true) });
   const data = signal<DashboardData>(dashboardData());
   const tables = signal<TableData>(tableData());
-  const settings = signal<Settings>({ weather: weatherMode, dayNight, theme, speed: 1, labels: true });
 
   // ---------- what-if commands (§9, W8) ----------
 
@@ -270,8 +273,19 @@ function start(root: HTMLElement): void {
       onSelectVehicle: (id: string) => {
         store.select({ kind: 'agent', id });
       },
-      onLabels: (on: boolean) => notImplemented(on),
-      onFacility: (id) => notImplemented(id),
+      onLabels: (on: boolean) => {
+        saveFlag(storage, LABELS_KEY, on);
+        settings.value = { ...settings.value, labels: on };
+        data.value = dashboardData();
+      },
+      onFacility: (id: FacilityId) => {
+        // Fly there without selecting a bay (Q2); clearing the selection also stops any follow.
+        const f = FACILITIES.find((x) => x.id === id);
+        const b = f ? hub.buildings.find((x) => x.id === f.building) : undefined;
+        if (!f || !b) return;
+        store.clearSelection();
+        rig.glideTo({ x: b.x, z: b.z }, f.distance);
+      },
       onSelectUnit: (id: string) => {
         store.select({ kind: 'resource', id });
       },
@@ -400,6 +414,47 @@ function start(root: HTMLElement): void {
   });
   window.addEventListener('resize', resize);
 
+  // ---------- building labels (I-1, I-4) ----------
+
+  const labelAnchors = new Map<FacilityId, { x: number; y: number; z: number; priority: number }>(
+    FACILITIES.flatMap((f) => {
+      const b = hub.buildings.find((x) => x.id === f.building);
+      return b ? [[f.id, { x: b.x, y: f.labelY, z: b.z, priority: f.priority }] as const] : [];
+    }),
+  );
+  let shownLabels: ReadonlySet<FacilityId> = new Set();
+  /** Positions every label over its building, then hides the lower-priority ones that overlap. */
+  const placeLabels = (): void => {
+    const els = overlay.querySelectorAll<HTMLElement>('[data-facility]');
+    if (els.length === 0) {
+      shownLabels = new Set();
+      return;
+    }
+    const rects: { id: FacilityId; priority: number; x: number; y: number; w: number; h: number; el: HTMLElement }[] = [];
+    for (const el of els) {
+      const id = el.dataset.facility as FacilityId;
+      const a = labelAnchors.get(id);
+      const p = a ? toScreen(a.x, a.y, a.z) : null;
+      if (!a || !p) {
+        el.style.visibility = 'hidden';
+        continue;
+      }
+      const w = el.offsetWidth;
+      const h = el.offsetHeight;
+      const x = p.x - w / 2;
+      const y = p.y - h;
+      el.style.transform = `translate(${String(Math.round(x))}px, ${String(Math.round(y))}px)`;
+      rects.push({ id, priority: a.priority, x, y, w, h, el });
+    }
+    // Labels never show through the dashboard panels.
+    const blockers = [...overlay.querySelectorAll<HTMLElement>('.dashboard .panel, .sheet-detail, .sheet-tracker, .sheet-table')]
+      .map((el) => el.getBoundingClientRect())
+      .filter((b) => b.width > 0 && b.height > 0)
+      .map((b) => ({ x: b.left, y: b.top, w: b.width, h: b.height }));
+    shownLabels = declutter(rects, blockers);
+    for (const r of rects) r.el.style.visibility = shownLabels.has(r.id) ? 'visible' : 'hidden';
+  };
+
   // ---------- loop (A3) ----------
 
   let accumulator = createAccumulator(rates.stepWallSec, 5);
@@ -477,6 +532,19 @@ function start(root: HTMLElement): void {
     world.update({ dt, wallTime: elapsed, reducedMotion, poolFraction: q.lampPoolFraction, details });
     lampsLit = world.lampsLit();
     // The dome follows the camera sideways so its horizon never comes closer; clouds stay put.
+    site.update({
+      dt,
+      wallTime: elapsed,
+      night: environment.nightFactor,
+      tier: qualityTier,
+      reducedMotion,
+      vehicles: curr.agents.flatMap((a) => {
+        if (a.kind === 'pedestrian') return [];
+        const p = poses.get(a.id);
+        return p ? [{ x: p.x, z: p.z, kind: a.kind }] : [];
+      }),
+    });
+    placeLabels();
     sky.group.position.set(camera.position.x, 0, camera.position.z);
     sky.update(skyColours(environment, weatherMode), q.clouds, reducedMotion ? 0 : dt);
 
@@ -543,10 +611,15 @@ function start(root: HTMLElement): void {
         if (value === 0 || value === 1 || value === 2 || value === 3) setSpeed(value);
       },
       simTimes: () => ({ visible: sim.snapshot().simTimeSec, baseline: baseline.snapshot().simTimeSec }),
-      // M5 hooks: wired in Stage 4.
-      facilityLabels: () => notImplemented(),
-      boomOpen: (id) => notImplemented(id),
-      patrolPose: () => notImplemented(),
+      facilityLabels: () => {
+        if (!settings.value.labels) return [];
+        return facilityStatuses(curr).map((s: FacilityStatus) => {
+          const el = overlay.querySelector<HTMLElement>(`[data-facility="${s.id}"]`);
+          return { id: s.id, text: el?.textContent ?? '', state: s.state, visible: shownLabels.has(s.id) };
+        });
+      },
+      boomOpen: (id) => site.boomOpen(id),
+      patrolPose: () => site.patrolPose(),
     };
     window.__hub = hooks;
   }

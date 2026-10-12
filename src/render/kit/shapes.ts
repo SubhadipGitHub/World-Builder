@@ -1,4 +1,4 @@
-import { CapsuleGeometry, CylinderGeometry, IcosahedronGeometry, LatheGeometry, Vector2, type BufferGeometry } from 'three';
+import { BoxGeometry, CapsuleGeometry, CylinderGeometry, IcosahedronGeometry, LatheGeometry, Vector2, type BufferGeometry } from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import type { Vec2 } from '../../sim/types';
 
@@ -39,4 +39,9 @@ export function lathe(profile: readonly Vec2[], segments = 12): BufferGeometry {
 /** Low-poly sphere (icosahedron), radius r. */
 export function blob(radius: number, detail = 1): BufferGeometry {
   return flat(new IcosahedronGeometry(radius, detail));
+}
+
+/** Plain box (12 triangles), for decals and thin panels where rounding would be invisible. */
+export function slab(w: number, h: number, d: number): BufferGeometry {
+  return flat(new BoxGeometry(w, h, d));
 }

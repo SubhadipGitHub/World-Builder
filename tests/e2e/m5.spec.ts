@@ -39,11 +39,16 @@ test('"Wash tunnel down" turns the wash label Offline (I-2 with M4)', async ({ p
     window.__hub!.applyScenario({ type: 'setUnitOnline', unitId: 'wash1', online: false });
   });
   await expect.poll(async () => (await labels(page)).find((l) => l.id === 'wash')?.state).toBe('offline');
-  expect((await labels(page)).find((l) => l.id === 'wash')?.text).toContain('1 offline');
+  // Zoomed out, labels are compact (I-4); the accessible name always carries the full status.
+  await expect(page.getByRole('button', { name: /^Express Wash, Offline, 1 offline/ })).toHaveCount(1);
 });
 
 test('clicking a label flies the camera to that building (I-4, Q2)', async ({ page }) => {
   await open(page);
+  // Start near the energy area, where the Fuel label is clear of the panels.
+  await page.getByRole('navigation', { name: 'Areas' }).getByRole('button', { name: 'EV charging & fuel' }).click();
+  await expect.poll(async () => page.evaluate(() => window.__hub!.cameraTarget().x), { timeout: 15_000 }).toBeCloseTo(145, 0);
+  await expect.poll(async () => (await labels(page)).find((l) => l.id === 'fuel')?.visible, { timeout: 10_000 }).toBe(true);
   await page.getByRole('button', { name: /^Fuel, / }).click();
   await expect
     .poll(async () => page.evaluate(() => window.__hub!.cameraTarget().x), { timeout: 15_000 })

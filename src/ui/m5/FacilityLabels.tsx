@@ -1,6 +1,5 @@
 import type { JSX } from 'preact';
-import { notImplemented } from '../../shared/notImplemented';
-import type { FacilityId, FacilityStatus } from '../facilities';
+import { STATE_LABEL, labelName, type FacilityId, type FacilityStatus } from '../facilities';
 
 export interface FacilityLabelsProps {
   readonly statuses: readonly FacilityStatus[];
@@ -17,6 +16,28 @@ export interface FacilityLabelsProps {
  *  - the detail line, unless compact
  * Clicking calls onSelect(id).
  */
-export function FacilityLabels(props: FacilityLabelsProps): JSX.Element {
-  return notImplemented(props);
+export function FacilityLabels({ statuses, compact, onSelect }: FacilityLabelsProps): JSX.Element {
+  return (
+    <div class="facility-labels">
+      {statuses.map((s) => (
+        <button
+          key={s.id}
+          type="button"
+          class={`facility-label state-${s.state}`}
+          data-facility={s.id}
+          aria-label={labelName(s)}
+          onClick={() => {
+            onSelect(s.id);
+          }}
+        >
+          <span class="facility-name">{s.name}</span>
+          <span class="facility-state">
+            <span class="status-dot" aria-hidden="true" />
+            {STATE_LABEL[s.state]}
+          </span>
+          {compact ? null : <span class="facility-detail">{s.detail}</span>}
+        </button>
+      ))}
+    </div>
+  );
 }

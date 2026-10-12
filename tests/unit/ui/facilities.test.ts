@@ -41,7 +41,9 @@ describe('facilityStatuses (I-1, I-2)', () => {
   });
 
   it('shows the counter queue on the terminal (I-3)', () => {
-    expect(byId(facilityStatuses(snapshot([agent()], [], { counterQueue: 3 })), 'terminal')).toMatchObject({ state: 'ok', queue: 3, detail: 'Counter: 3 waiting' });
+    expect(byId(facilityStatuses(snapshot([agent()], [], { counterQueue: 2 })), 'terminal')).toMatchObject({ state: 'ok', queue: 2, detail: 'Counter: 2 waiting' });
+    // The I-2 rule applies to the counter too: a queue of 3 or more is Busy.
+    expect(byId(facilityStatuses(snapshot([], [], { counterQueue: 3 })), 'terminal').state).toBe('busy');
     expect(byId(facilityStatuses(snapshot([], [], { counterQueue: 5 })), 'terminal').state).toBe('busy');
     expect(byId(facilityStatuses(snapshot([], [], { counterQueue: 1 })), 'terminal').detail).toBe('Counter: 1 waiting');
   });
@@ -64,6 +66,11 @@ describe('declutter (I-4)', () => {
 
   it('keeps labels that do not overlap', () => {
     expect(declutter([r('lot', 2, 0, 0), r('wash', 6, 200, 0), r('fuel', 4, 0, 100)])).toEqual(new Set(['lot', 'wash', 'fuel']));
+  });
+
+  it('hides labels that overlap a dashboard panel (blockers)', () => {
+    const blockers = [{ x: 180, y: 0, w: 300, h: 200 }];
+    expect(declutter([r('lot', 2, 0, 0), r('wash', 6, 200, 0)], blockers)).toEqual(new Set(['lot']));
   });
 
   it('breaks priority ties by facility order, deterministically', () => {

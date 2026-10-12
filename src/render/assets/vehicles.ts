@@ -1,7 +1,8 @@
 import type { BufferGeometry } from 'three';
+import { brand } from '../../config/brand';
 import { dimensions } from '../../config/facility';
 import { assemble, paint, place } from '../kit/assemble';
-import { cylinder, roundedBox } from '../kit/shapes';
+import { cylinder, roundedBox, slab } from '../kit/shapes';
 import type { Palette } from '../palette';
 
 export type VehicleAssetKind = 'sedan' | 'suv' | 'ev' | 'shuttle' | 'tow' | 'van' | 'cart';
@@ -25,6 +26,8 @@ const BUMPER = '#3A3D45';
 const HEAD = '#FFF3C4';
 const TAIL = '#E0262B';
 const WHITE = '#FFFFFF';
+/** GoldLane fleet livery (B-4): the brand gold, in every theme. */
+const LIVERY = brand.colors.accent;
 
 type Parts = BufferGeometry[];
 
@@ -95,6 +98,12 @@ function car(kind: 'sedan' | 'suv' | 'ev', palette: Palette): VehicleAsset {
   trim.push(box(0.16, 0.24, bodyW * 0.96, 0.06, BUMPER, -l / 2 + 0.08, s.clearance + 0.14));
   for (const sz of [1, -1]) {
     paintParts.push(box(0.16, 0.1, (w - bodyW) / 2 + 0.04, 0.03, WHITE, l * s.cabinX + cabinL / 2 - 0.1, bodyTop + 0.06, sz * (w / 2 - ((w - bodyW) / 2 + 0.04) / 2)));
+  }
+  // Livery (B-4, G11): a gold stripe along both sides and a small door mark, part of the untinted trim.
+  for (const sz of [1, -1]) {
+    const side = sz * (bodyW / 2 + 0.006);
+    trim.push(place(paint(slab(l * 0.62, 0.07, 0.012), LIVERY), { x: -l * 0.02, y: s.clearance + s.bodyH * 0.55, z: side }));
+    trim.push(place(paint(slab(0.3, 0.16, 0.012), LIVERY), { x: l * 0.1, y: s.clearance + s.bodyH * 0.55 + 0.16, z: side }));
   }
   wheels(trim, l, w, s.wheel, l * 0.2);
   lights(lamps, l, w, bodyTop - 0.16, bodyW / 2 - 0.26, s.lightBar);

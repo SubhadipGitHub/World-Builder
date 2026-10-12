@@ -1,5 +1,6 @@
 import type { Edge } from '../sim/graph/laneGraph';
 import type { Vec2 } from '../sim/types';
+import { distanceToEdge } from './geometry';
 import { hub, hubGraph } from './hub';
 
 export interface LampPlacement {
@@ -22,21 +23,9 @@ const MAIN_ROAD_SPEED = 9;
 const MAIN_ROAD_STEP = LAMP_SPACING * 0.6;
 /** Ready-lot floodlights on the medians between rows: two per median (16 before the visual review). */
 const FLOODS: readonly Vec2[] = [-4, 20.5, 42.5, 68].flatMap((x) => [110, 150].map((z) => ({ x, z })));
-
-function distanceToEdge(p: Vec2, e: Edge): number {
-  let best = Infinity;
-  const pts = e.path.points;
-  for (let i = 1; i < pts.length; i++) {
-    const a = pts[i - 1] as Vec2;
-    const b = pts[i] as Vec2;
-    const dx = b.x - a.x;
-    const dz = b.z - a.z;
-    const len2 = dx * dx + dz * dz || 1;
-    const t = Math.min(1, Math.max(0, ((p.x - a.x) * dx + (p.z - a.z) * dz) / len2));
-    best = Math.min(best, Math.hypot(p.x - (a.x + dx * t), p.z - (a.z + dz * t)));
-  }
-  return best;
-}
+/** Ready-lot light masts (SEC-3, G7): 4, tried at the lot's corners, then along its sides, just outside the surface. */
+const MASTS = 4;
+const MAST_OUTSIDE = 4;
 
 interface Box {
   readonly minX: number;
@@ -112,6 +101,26 @@ export function lampPlacements(): readonly LampPlacement[] {
   };
 
   for (const f of FLOODS) if (clear(f)) lamps.push({ x: f.x, z: f.z, heading: aimAtRoad(f), kind: 'flood' });
+
+  // Masts face the lot centre; candidates go round the lot so the four end up spread out.
+  const lot = hub.buildings.find((b) => b.id === 'lot');
+  if (lot) {
+    const hx = lot.width / 2 + MAST_OUTSIDE;
+    const hz = lot.depth / 2 + MAST_OUTSIDE;
+    const ring: Vec2[] = [];
+    for (const [fx, fz] of [[-1, -1], [1, 1], [1, -1], [-1, 1]] as const) ring.push({ x: lot.x + fx * hx, z: lot.z + fz * hz });
+    for (let k = 1; k < 8; k++) {
+      const f = k / 8;
+      ring.push({ x: lot.x - hx + 2 * hx * f, z: lot.z - hz }, { x: lot.x - hx + 2 * hx * f, z: lot.z + hz }, { x: lot.x - hx, z: lot.z - hz + 2 * hz * f }, { x: lot.x + hx, z: lot.z - hz + 2 * hz * f });
+    }
+    let placed = 0;
+    for (const p of ring) {
+      if (placed === MASTS) break;
+      if (!clear(p)) continue;
+      lamps.push({ x: p.x, z: p.z, heading: Math.atan2(lot.z - p.z, lot.x - p.x), kind: 'mast' });
+      placed++;
+    }
+  }
 
   /** Tries a few distances out from the road; returns the first clear spot. */
   const tryPlace = (e: Edge, s: number, side: 1 | -1, kind: 'street' | 'walkway'): boolean => {

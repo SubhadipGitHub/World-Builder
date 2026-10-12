@@ -1059,7 +1059,7 @@ export function createSim(config: SimConfig): Sim {
     step,
     snapshot() {
       const hours = (((START_HOUR * 3600 + now) / 3600) % 24 + 24) % 24;
-      return { tick, simTimeSec: now, clockHours: hours, weather: weatherMode, timeScale, agents: agents(), resources: resources(), scenario: scenarioView(scenario, now), counterQueue: 0 };
+      return { tick, simTimeSec: now, clockHours: hours, weather: weatherMode, timeScale, agents: agents(), resources: resources(), scenario: scenarioView(scenario, now), counterQueue: customers.length };
     },
     metrics() {
       const fleetOnMap = [...vehicles.values()].filter((v) => v.phase.kind !== 'offMap');

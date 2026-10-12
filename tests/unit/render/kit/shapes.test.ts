@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { blob, capsule, cylinder, lathe, roundedBox } from '../../../../src/render/kit/shapes';
+import { blob, capsule, cylinder, lathe, roundedBox, slab } from '../../../../src/render/kit/shapes';
 import { extent } from './helpers';
 
 describe('shape kit (V-1, P3)', () => {
@@ -55,3 +55,17 @@ describe('shape kit (V-1, P3)', () => {
     }
   });
 });
+
+describe('slab (decals and thin panels)', () => {
+  it('is a plain 12-triangle box of exactly w × h × d with normals', () => {
+    const g = slab(0.3, 0.16, 0.012);
+    const e = extent(g);
+    expect(e.size.x).toBeCloseTo(0.3, 6);
+    expect(e.size.y).toBeCloseTo(0.16, 6);
+    expect(e.size.z).toBeCloseTo(0.012, 6);
+    expect(g.getAttribute('position').count).toBe(36);
+    expect(g.hasAttribute('normal')).toBe(true);
+    expect(g.hasAttribute('uv')).toBe(false);
+  });
+});
+

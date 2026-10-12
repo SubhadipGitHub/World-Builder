@@ -12,6 +12,7 @@ import type { FacilityId, FacilityStatus } from '../facilities';
 import type { KpiCard, KpiId } from '../kpis';
 import { DetailPanel } from '../m1/DetailPanel';
 import { WhatIfDrawer, type OutageGroup } from '../m4/WhatIfDrawer';
+import { FacilityLabels } from '../m5/FacilityLabels';
 import type { Speed } from '../m4/SpeedControl';
 import { scenarioChips, type KpiDelta, type QueueKey } from '../scenario';
 import type { SearchResult } from '../search';
@@ -110,6 +111,7 @@ export function Dashboard(props: DashboardProps): JSX.Element {
 
   return (
     <div class="dashboard">
+      {settings.labels ? <FacilityLabels statuses={data.facilities} compact={data.compactLabels} onSelect={props.onFacility} /> : null}
       <TopBar
         snapshot={data.snapshot}
         unitIds={props.unitIds}
