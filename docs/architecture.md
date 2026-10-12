@@ -181,7 +181,7 @@ interface AgentView { id: string; kind: AgentKind; cls?: VehicleClass;
 
 ## 9. Security and privacy
 
-- **No network**: the built page makes no requests (asserted in E2E). A CSP meta tag is injected at build: `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:`. Inline is unavoidable for a single file.
+- **No network**: the built page makes no requests (asserted in E2E). A CSP meta tag is injected **at build only** by a Vite plugin (`vite.config.ts`, `apply: 'build'`). It must never be in `index.html`, or the dev server's separate module files are blocked and the page is blank (regression guarded by `tests/e2e/dev.spec.ts`). The policy is: `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:`. Inline is unavoidable for a single file.
 - No `eval` or `new Function`. Any user-visible text comes from config or datagen and is rendered as text, never as HTML.
 - `localStorage` is only used for the theme choice, wrapped in try/catch.
 - Dependencies are kept minimal (three, preact, @preact/signals at runtime). A lockfile is committed and `npm audit` runs in the check script.
@@ -203,8 +203,8 @@ interface AgentView { id: string; kind: AgentKind; cls?: VehicleClass;
 1. ✅ Scaffold: Vite, TS strict, ESLint, Vitest, Playwright, singlefile build, CI scripts, `git init`.
 2. ✅ `sim/rng`, `graph`, then `traffic` (IDM, zones), then `resources`, then `lifecycle` and agents, then `demand`, then `metrics` and `datagen`. Then soak tests.
 3. ✅ `layout/hub` with the real facility graph. Soak passes on the real layout.
-4. Render: scene, builders (blockout), agent instancing, interpolation.
-5. Interaction: camera rig, picking, selection, M1 detail panel, area switcher. Then E2E.
+4. ✅ Render: scene, builders (blockout), agent instancing, interpolation.
+5. ✅ Interaction: camera rig, picking, selection, M1 detail panel, area switcher. Then E2E.
 
 **M2 (blocks 4–5)**: glass UI shell, KPIs, tracker, table, search, alerts; then weather, day/night, theme, mobile bottom sheet; then performance tuning on the reference devices.
 
@@ -253,3 +253,111 @@ Decisions and contract changes made while implementing, each covered by tests.
 - 166 unit and property tests and 12 soak runs (3 seeds × 4 weathers × 2 simulated hours) pass, with zero overlaps and zero gridlock.
 - Typical KPIs: utilisation 53–69%, turnaround 48–64 min, ready EV state of charge ≥ 80%.
 - Coverage on `src/sim`: 97% statements, 91% branches, 100% functions, 98.5% lines. Branch coverage for `traffic/engine` (87%), `world` (88.5%), `idm` and `rng` (86%) is below 90% individually; the gate applies to `src/sim` as a whole.
+
+## 14. M1 steps 4–5: rendering and interaction (approved 2026-10-12)
+
+### 14.1 Design
+- **Pure logic is separated from Three.js and the DOM, and unit-tested:** `layout/positions` (unit poses, hub bounds), `app/loop` (fixed-step accumulator, at most 5 steps per frame), `app/webgl` (WebGL 2 probe), `render/cameraMath` (clamping, eased glides, follow smoothing, reduced motion), `render/interp` (snapshot interpolation, snapping moves over 20 m), `render/registry` (instance slots ↔ agent ids for picking), `ui/format` (labels and units), `ui/throughput` (per-unit completions per hour and last exit, derived from resource snapshots), and `ui/store` (selection and area signals).
+- **Scene (blockout):**
+  - Buildings come from `hub.buildings`. Roads and walkways are ribbons generated from lane-graph edges and merged per material.
+  - Agents are drawn with one `InstancedMesh` per kind and class (body plus cabin), with slots managed by `render/registry`.
+  - Clickable units (bays, chargers, kiosks, slots, gates) are an invisible instanced hit-box at each `unitPose`.
+  - Dark palette by default (D6).
+- **Picking:** a pointer press and release within 5 px and 300 ms counts as a click. It raycasts the agent meshes first, then the unit hit-boxes; clicking empty ground clears the selection (I-6). Esc also clears it.
+- **Selection:** a pulsing gold ring under the object, plus a DOM label (`data-testid="selection-label"`) positioned by projecting the object's position each frame (A7).
+- **Camera rig:** three's `MapControls` handles input (left-drag pan, right-drag rotate, wheel or pinch zoom), and the result is clamped by `cameraMath.clampState`. Selecting something or switching area starts an eased glide. **A selection is followed until it is deselected** (decision 2026-10-12): rotate and zoom work around the followed object, and a pan eases back onto it. Switching area deselects (and so stops following), keeping "following ⇔ selected" strictly true.
+- **Loop:** `requestAnimationFrame` → `createAccumulator(0.05, 5)` → `sim.step()` × n → keep the previous and current snapshots → `interpolateAgents(alpha)` → render. The panel refreshes at 10 Hz (§5).
+- **Fallback:** if `hasWebGL2` is false, a `role="alert"` message explains that WebGL 2 is needed, and the 3D view is not started.
+- **Units:** speeds are shown in mph, to match the odometer in miles (approved).
+- **Click vs drag:** press and release within 5 px and 300 ms (approved).
+- **Test hooks:** `window.__hub` (`src/app/testHooks.ts`) exists only in `vite build --mode test` (`.env.test` sets `VITE_TEST_HOOKS=1`).
+
+### 14.2 Test plan (written, failing)
+| Layer | File | Covers |
+|---|---|---|
+| Unit | `tests/unit/layout/positions.test.ts` | Unit poses on their park edges; bounds; areas |
+| Unit | `tests/unit/app/{loop,webgl}.test.ts` | A3 accumulator incl. step cap; N-8 probe |
+| Unit | `tests/unit/render/{cameraMath,interp,registry}.test.ts` | I-1 clamps, I-2/I-5 glides and follow, N-5 reduced motion; interpolation and teleport snap; instance slots |
+| Unit (jsdom) | `tests/unit/ui/{format,throughput,store}.test.ts`, `DetailPanel.test.tsx`, `AreaSwitcher.test.tsx` | I-4 panel fields per kind, "Left the hub", close; I-5 switcher with aria-pressed; labels and units |
+| E2E | `tests/e2e/m1.spec.ts` (`npm run test:e2e`) | One file under 400 KB gzipped with no remote URLs; loads offline with no errors; ≥ 10 cars and something moving; draw calls < 150; area fly-to; click a moving car → selected, label, details, followed; click a bay → details; Esc clears; wheel zoom, zoom limit, pan; WebGL 2 fallback alert |
+
+Headless Chromium uses SwiftShader WebGL 2 (`playwright.config.ts`), verified on this machine.
+
+### 14.3 Implementation notes (Stage 4, 2026-10-12)
+- **Contract addition:** `layout/positions.unitMarker(unitId)` (tested). Each unit has an equipment post (kiosk, charger post, pump, gate post, wash control) 1.2 m past the front of its parking spot, with a gold cap. The post is both the visual and the click target, so clicking a bay never hits the car parked in it. Picking order: unit markers, then agents, then the nearest projected agent or marker within 14 px (small objects seen from far away).
+- **Canopies** (return lanes, wash, service, EV hub, fuel, depot) have open roof frames with a gold fascia, so the bays stay visible from above.
+- **Follow:** while gliding to a followed object, the glide re-aims at its live position every frame, so it lands on the object rather than where it was when clicked.
+- **Overview framing:** distance 560 m (max 600) at (0, 35), so the whole hub fits on screen.
+- **E2E robustness:** camera-dependent checks wait for the condition (camera arrived, car centred) with a timeout instead of a fixed sleep. Under load, software WebGL frames can exceed the 0.25 s frame cap, so camera time runs slower than wall-clock time. The assertions themselves are unchanged.
+
+### 14.4 Verified results (2026-10-12)
+- 221 unit tests, 12 soak runs and 7 E2E tests pass (E2E green on 5 consecutive full-suite runs after the fixes). Typecheck and lint are clean.
+- Production `dist/index.html`: 175 KB gzipped (budget 400 KB), with no test hooks (`__hub` absent). The test build adds them via `vite build --mode test`.
+- Draw calls well under 150 (asserted in E2E). Coverage on `src/sim` is unchanged (97% statements, 91% branches).
+
+
+## 15. M2: dashboard and extras (Stage 3, awaiting approval)
+
+### 15.1 Data the dashboard needs, and where it comes from
+| Need | Source | Module |
+|---|---|---|
+| KPI cards and trends (D-3) | `sim.metrics()`, sampled every 5 simulated minutes for the trend arrow | `ui/kpis` |
+| Tracker timestamps (D-5) | `milestone` events, per vehicle, reset on `returned` | `ui/timeline` |
+| Alerts (D-8) | `maintenanceFlagged`, `towDispatched`, `queueOverflow` events, plus a snapshot check for an EV staged below the SoC threshold (once per vehicle) | `ui/alerts` |
+| Checkout log tab (D-6) | `checkout` events, newest first, capped | `ui/tables` |
+| Fleet and queue tabs (D-6) | snapshot agents and resources | `ui/tables` |
+| Search (D-2) | snapshot agents (ID, plate, **agreement #**) and units (label) | `ui/search` |
+| Location column | position → area | `layout/positions.areaOf` |
+
+**Contract addition:** `AgentView.agreementNo` (set while a car is departing with a customer, otherwise null), so search can find agreement numbers (D-2).
+
+The render loop drains sim events every frame into timeline, alerts and the checkout log. The overlay re-renders at 4 Hz for tables and 10 Hz for the panel and tracker (§5).
+
+### 15.2 Components (Preact; all pure props-in, callbacks-out, tested in jsdom)
+- `TopBar`:
+  - logo (brand mark, app name, hub name)
+  - search (a combobox: arrow keys, Enter, click; picking a result selects and flies, D-2)
+  - area switcher (existing)
+  - weather menu (4 modes, X-1)
+  - live clock (hub local time)
+  - alerts button with an unread badge and a list (click an alert → select its vehicle)
+  - day/night control: Auto / Day / Night (X-2)
+  - user chip with the theme toggle (X-4)
+- `KpiCards`: 3 cards, each with a value, a sub-line and a trend arrow labelled for screen readers.
+- `ProcessTracker` (bottom-left): with a vehicle selected, the 6 steps with timestamps, current step marked `aria-current="step"`. With nothing selected, the number of vehicles at each step.
+- `LiveTable` (bottom): ARIA tabs (Active fleet / Turnaround & service queue / Customer checkout log); clicking a row selects it.
+- `DetailPanel` (existing), restyled as glass.
+- Glass: `backdrop-filter: blur(14px) saturate(140%)` on translucent panels. Tokens per theme on `:root[data-theme]`.
+
+### 15.3 Weather, day/night and quality (render)
+- `render/environment.environmentFor(weather, clockHours, dayNight)` is pure. It returns:
+  - sun elevation and intensity, ambient intensity
+  - fog density
+  - `nightFactor` in [0, 1] (sunrise 06:00, sunset 19:00, with a 1 h twilight blend)
+  - `wetness`, `rain`, `heat`, `shimmer`
+  - `dayNight` is `auto | day | night`: day forces noon, night forces 22:00.
+- The Three.js side applies the result each frame:
+  - lights and fog
+  - wet asphalt: darker and less rough
+  - an instanced rain-streak field
+  - at night: emissive windows, signage and lot floodlights, plus instanced headlight cones on moving cars
+  - heatwave: an amber grade, and a cheap shimmer (vertex wobble on a full-screen quad), off with reduced motion or on the low tier (N-5, N-2)
+- Changing the weather sends the existing `setWeather` command, so the simulation rules change too (X-1).
+- `render/quality` is pure:
+  - It samples frame time in 2 s windows and returns tier 0–2. It steps down after a window averaging over 22 ms and up after one under 12 ms (A-plan §6).
+  - Each tier caps pixel ratio (2 / 1.5 / 1), sets shadow-map size (2048 / 1024 / off), and turns shimmer on or off.
+  - Touch devices start on tier 1.
+
+### 15.4 Theme and mobile
+- `ui/theme`: `loadTheme(storage)` defaults to `dark`, and `saveTheme(storage, theme)`. Both are wrapped in try/catch, so blocked storage is harmless (X-4). The theme is applied as `<html data-theme>`, and the scene palette switches to the light variant.
+- Below 720 px: the top bar compacts, the KPI cards scroll sideways, and the detail panel, tracker and table move into a **bottom sheet** with a drag handle. MapControls already supports touch (X-3). No horizontal page scroll.
+
+### 15.5 Test hooks (additions to `window.__hub`)
+`weather()`, `environment()` (the current `environmentFor` result), `theme()`, `qualityTier()`.
+
+### 15.6 Test plan
+| Layer | Files | Covers |
+|---|---|---|
+| Unit | `ui/{kpis,timeline,alerts,tables,search,theme}.test.ts`, `render/{environment,quality}.test.ts`, `layout/positions.test.ts` (areaOf), `sim/world.test.ts` (agreementNo) | D-3, D-5, D-6, D-8, D-2, X-1, X-2, X-4, N-2 |
+| Unit (jsdom) | `ui/{TopBar,KpiCards,ProcessTracker,LiveTable}.test.tsx` | Component behaviour and accessibility |
+| E2E | `tests/e2e/m2.spec.ts` | Glass panels; KPIs visible; search → select and fly; table row → select; weather → sim and visuals; night → night factor; theme persists across reload; mobile 390 × 844 with no horizontal scroll and a bottom sheet; reduced motion turns shimmer off; draw calls < 150 in rain at night |

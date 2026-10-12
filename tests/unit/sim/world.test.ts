@@ -157,6 +157,25 @@ describe('createSim: events (D-5, D-6, D-8)', () => {
   });
 });
 
+describe('createSim: agreement numbers on departing cars (D-2 search)', () => {
+  it('shows the agreement while a customer drives off, and null otherwise', () => {
+    const sim = createSim({ seed: 16 });
+    let seenDeparting = 0;
+    steps(sim, 2_400, (i) => {
+      if (i % 20 !== 0) return;
+      for (const a of fleetOnMap(sim)) {
+        if (a.state === 'departing') {
+          seenDeparting++;
+          expect(a.agreementNo).toMatch(/^RA-\d{2}-\d{7}$/);
+        } else {
+          expect(a.agreementNo).toBeNull();
+        }
+      }
+    });
+    expect(seenDeparting).toBeGreaterThan(0);
+  });
+});
+
 describe('createSim: severe maintenance and the tow truck (L-1 severe path)', () => {
   it('tows a severe case to a service bay, details it there and sends it on, without overlaps', () => {
     const sim = createSim({ seed: 21, rateOverrides: { maintenanceChance: 1, severeChance: 1 } });

@@ -411,7 +411,7 @@ export const hub: HubLayout = {
     { id: 'depot', label: 'Tow depot', x: -130, z: -121, width: 12, depth: 8, height: 5 },
   ],
   areas: [
-    { id: 'overview', label: 'Overview', x: 10, z: 30, distance: 420 },
+    { id: 'overview', label: 'Overview', x: 0, z: 35, distance: 560 },
     { id: 'return', label: 'Return & inspection', x: -90, z: -72, distance: 110 },
     { id: 'wash', label: 'Wash & maintenance', x: 70, z: -74, distance: 140 },
     { id: 'energy', label: 'EV charging & fuel', x: 145, z: 40, distance: 120 },

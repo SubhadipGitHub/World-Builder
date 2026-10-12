@@ -16,7 +16,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:soak": "vitest run --config vitest.soak.config.ts",
-    "test:e2e": "playwright test",
+    "test:e2e": "vite build --mode test && playwright test",
     "coverage": "vitest run --coverage",
     "check": "npm run typecheck && npm run lint && npm run test"
   },

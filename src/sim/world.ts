@@ -47,6 +47,8 @@ export interface AgentView {
   readonly state: VehicleState | null;
   readonly stage: TrackerStage | null;
   readonly plate: string | null;
+  /** Rental agreement while a customer is departing with the car (D-2 search); otherwise null. */
+  readonly agreementNo: string | null;
   readonly fuelPct: number | null;
   readonly socPct: number | null;
   readonly odometerMi: number | null;
@@ -920,6 +922,7 @@ export function createSim(config: SimConfig): Sim {
       state: v.state,
       stage: v.stage,
       plate: v.plate,
+      agreementNo: null,
       fuelPct: v.fuelPct,
       socPct: v.socPct,
       odometerMi: v.odometerMi,
@@ -957,6 +960,7 @@ export function createSim(config: SimConfig): Sim {
       state: null,
       stage: null,
       plate: null,
+      agreementNo: null,
       fuelPct: null,
       socPct: null,
       odometerMi: null,
