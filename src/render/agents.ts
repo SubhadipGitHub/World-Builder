@@ -1,156 +1,171 @@
 import {
-  BoxGeometry,
+  AdditiveBlending,
   BufferGeometry,
+  CircleGeometry,
   Color,
-  CylinderGeometry,
   DynamicDrawUsage,
+  Float32BufferAttribute,
   Group,
   InstancedMesh,
   Matrix4,
+  MeshBasicMaterial,
   MeshStandardMaterial,
+  MultiplyBlending,
   Quaternion,
-  SphereGeometry,
   Vector3,
   type Raycaster,
 } from 'three';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { dimensions } from '../config/facility';
 import type { AgentView } from '../sim/world';
+import { personAsset, walkBob } from './assets/people';
+import { vehicleAsset, type VehicleAssetKind } from './assets/vehicles';
 import type { PoseSample } from './interp';
 import type { Palette } from './palette';
 import { createInstanceRegistry, type InstanceRegistry } from './registry';
 
 export interface AgentLayer {
   readonly group: Group;
-  /** Places every agent at its interpolated pose; agents that left are hidden. */
-  update(agents: readonly AgentView[], poses: ReadonlyMap<string, PoseSample>): void;
+  /** Places every agent at its interpolated pose; agents that left are hidden. `timeSec` drives the walk bob. */
+  update(agents: readonly AgentView[], poses: ReadonlyMap<string, PoseSample>, timeSec?: number): void;
   /** Agent id under the ray, or null. */
   pick(raycaster: Raycaster): string | null;
   /** Last rendered pose of an agent. */
   poseOf(id: string): PoseSample | undefined;
+  /** 0 day … 1 night: head- and taillights glow, beams on moving vehicles (X-2, V-2). */
+  setNight(night: number): void;
+  /** The tow beacon flashes while towing (V-9). */
+  setBeacon(on: boolean): void;
+  setPalette(palette: Palette): void;
 }
 
-type VisualKey = 'sedan' | 'suv' | 'ev' | 'shuttle' | 'cart' | 'tow' | 'van' | 'pedestrian';
-
-interface Part {
-  readonly geometry: BufferGeometry;
-  readonly color: string | null;
-  /** Instance colours come from the agent id. */
-  readonly tinted?: boolean;
-  readonly pickable?: boolean;
-}
+type VisualKey = VehicleAssetKind | 'pedestrian';
 
 interface Visual {
   readonly registry: InstanceRegistry;
   readonly meshes: InstancedMesh[];
-  readonly tintedIndex: number | null;
-  readonly pickIndex: number;
+  /** Mesh that takes the per-instance paint or clothing colour, if any. */
+  readonly tinted: InstancedMesh | null;
+  /** Mesh used for picking. */
+  readonly pickMesh: InstancedMesh;
 }
 
 const CAPACITY: Readonly<Record<VisualKey, number>> = { sedan: 80, suv: 60, ev: 70, shuttle: 4, cart: 6, tow: 2, van: 2, pedestrian: 60 };
-
-/** Geometry is built in each kind's real size, length along +x (the heading), centred on the footprint. */
-const boxAt = (l: number, h: number, w: number, x: number, y: number): BufferGeometry => new BoxGeometry(l, h, w).translate(x, y, 0);
-
-function carParts(cls: 'sedan' | 'suv' | 'ev', palette: Palette): Part[] {
-  const { length: l, width: w } = dimensions[cls];
-  const bodyH = cls === 'suv' ? 0.8 : cls === 'ev' ? 0.62 : 0.56;
-  const cabinL = cls === 'suv' ? l * 0.62 : l * 0.52;
-  const cabinH = cls === 'suv' ? 0.62 : 0.5;
-  const bodyTop = 0.32 + bodyH;
-  return [
-    { geometry: boxAt(l * 0.9, 0.36, w * 1.02, 0, 0.3), color: palette.chassis },
-    { geometry: boxAt(l, bodyH, w, 0, 0.32 + bodyH / 2), color: '#FFFFFF', tinted: true, pickable: true },
-    { geometry: boxAt(cabinL, cabinH, w * 0.86, cls === 'suv' ? -l * 0.06 : -l * 0.08, bodyTop + cabinH / 2), color: palette.glass },
-  ];
-}
-
-function visuals(palette: Palette): Record<VisualKey, Part[]> {
-  const s = dimensions.shuttle;
-  const t = dimensions.tow;
-  const v = dimensions.van;
-  const c = dimensions.cart;
-  return {
-    sedan: carParts('sedan', palette),
-    suv: carParts('suv', palette),
-    ev: carParts('ev', palette),
-    shuttle: [
-      { geometry: boxAt(s.length, 2.3, s.width, 0, 0.45 + 1.15), color: palette.accent, pickable: true },
-      { geometry: boxAt(s.length * 0.92, 0.7, s.width + 0.04, 0.1, 2.0), color: palette.glass },
-    ],
-    cart: [
-      { geometry: boxAt(c.length, 0.7, c.width, 0, 0.55), color: '#F2F2F0', pickable: true },
-      { geometry: boxAt(c.length * 0.7, 0.08, c.width + 0.05, -0.1, 1.95), color: palette.accent },
-    ],
-    tow: [
-      {
-        geometry: mergeGeometries([boxAt(2.2, 2.0, t.width, t.length / 2 - 1.1, 1.4), boxAt(t.length - 2.2, 0.55, t.width, -1.1, 0.75)]),
-        color: palette.tow,
-        pickable: true,
-      },
-    ],
-    van: [
-      { geometry: boxAt(v.length, 2.1, v.width, 0, 1.45), color: '#F2F2F0', pickable: true },
-      { geometry: boxAt(0.9, 0.8, v.width + 0.04, v.length / 2 - 0.6, 1.9), color: palette.glass },
-    ],
-    pedestrian: [
-      {
-        geometry: mergeGeometries([new CylinderGeometry(0.2, 0.22, 1.2, 8).translate(0, 0.6, 0), new SphereGeometry(0.17, 10, 8).translate(0, 1.42, 0)]),
-        color: '#FFFFFF',
-        tinted: true,
-        pickable: true,
-      },
-    ],
-  };
-}
+const FLEET_KEYS: ReadonlySet<VisualKey> = new Set(['sedan', 'suv', 'ev']);
 
 const keyOf = (a: AgentView): VisualKey => (a.kind === 'fleet' ? (a.cls ?? 'sedan') : a.kind === 'pedestrian' ? 'pedestrian' : a.kind);
 
-/** Stable small hash so a car keeps its paint colour. */
+/** Stable small hash so a car keeps its paint colour and a walker its stride phase. */
 const hash = (id: string): number => {
   let h = 2166136261;
   for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 16777619);
   return h >>> 0;
 };
 
+/** Ground-level light wedge in front of a vehicle: bright at the bumper, fading out over 10 m. */
+function beamGeometry(): BufferGeometry {
+  const g = new BufferGeometry();
+  const near = 1.1;
+  const far = 2.8;
+  g.setAttribute('position', new Float32BufferAttribute([0, 0, -near, 0, 0, near, 10, 0, -far, 10, 0, far], 3));
+  g.setAttribute('color', new Float32BufferAttribute([1, 0.86, 0.62, 1, 0.86, 0.62, 0, 0, 0, 0, 0, 0], 3));
+  g.setIndex([0, 2, 1, 1, 2, 3]);
+  return g;
+}
+
+/** Unit disc whose vertex colour fades from grey at the centre to white at the rim (multiply blend → soft shadow). */
+function contactShadowGeometry(): BufferGeometry {
+  const g = new CircleGeometry(0.5, 20).rotateX(-Math.PI / 2);
+  const pos = g.getAttribute('position');
+  const colours: number[] = [];
+  for (let i = 0; i < pos.count; i++) {
+    const k = Math.min(1, Math.hypot(pos.getX(i), pos.getZ(i)) / 0.5);
+    const v = 0.45 + 0.55 * k * k;
+    colours.push(v, v, v);
+  }
+  g.setAttribute('color', new Float32BufferAttribute(colours, 3));
+  return g;
+}
+
+const BEAM_KINDS: ReadonlySet<string> = new Set(['fleet', 'shuttle', 'van', 'tow', 'cart']);
+const BEAM_CAPACITY = 220;
+const SHADOW_CAPACITY = 300;
 const UP = new Vector3(0, 1, 0);
 const HIDDEN = new Matrix4().makeScale(0, 0, 0);
+const WHITE = new Color('#FFFFFF');
 
-/** InstancedMesh pools per agent kind and class (architecture §6). */
+/** InstancedMesh pools per agent kind, built from the Pixar-style assets (architecture §16, P2). */
 export function createAgentLayer(palette: Palette): AgentLayer {
   const group = new Group();
   const all = new Map<VisualKey, Visual>();
   const owner = new Map<InstancedMesh, VisualKey>();
-  const defs = visuals(palette);
-  for (const key of Object.keys(defs) as VisualKey[]) {
-    const parts = defs[key];
-    const meshes = parts.map((p) => {
-      const mesh = new InstancedMesh(p.geometry, new MeshStandardMaterial({ color: p.color ?? '#FFFFFF', roughness: 0.6, metalness: 0.05 }), CAPACITY[key]);
-      mesh.instanceMatrix.setUsage(DynamicDrawUsage);
-      mesh.count = 0;
-      mesh.castShadow = true;
-      mesh.frustumCulled = false;
-      group.add(mesh);
-      owner.set(mesh, key);
-      return mesh;
-    });
-    const tintedIndex = parts.findIndex((p) => p.tinted);
-    all.set(key, { registry: createInstanceRegistry(CAPACITY[key]), meshes, tintedIndex: tintedIndex < 0 ? null : tintedIndex, pickIndex: Math.max(0, parts.findIndex((p) => p.pickable)) });
+
+  const solid = (): MeshStandardMaterial => new MeshStandardMaterial({ vertexColors: true, roughness: 0.45, metalness: 0.08 });
+  // Lamps are unlit colour that brightens past 1.0 at night, so bloom picks them up.
+  const lampMaterial = new MeshBasicMaterial({ vertexColors: true, toneMapped: false });
+
+  const pool = (key: VisualKey, geometry: BufferGeometry, material: MeshStandardMaterial | MeshBasicMaterial, shadows: boolean): InstancedMesh => {
+    const mesh = new InstancedMesh(geometry, material, CAPACITY[key]);
+    mesh.instanceMatrix.setUsage(DynamicDrawUsage);
+    mesh.count = 0;
+    mesh.castShadow = shadows;
+    mesh.frustumCulled = false;
+    group.add(mesh);
+    owner.set(mesh, key);
+    return mesh;
+  };
+
+  for (const key of ['sedan', 'suv', 'ev', 'shuttle', 'tow', 'van', 'cart'] as const) {
+    const asset = vehicleAsset(key, palette);
+    const paintMesh = pool(key, asset.paint, solid(), true);
+    const trimMesh = pool(key, asset.trim, solid(), true);
+    const lampMesh = pool(key, asset.lamps, lampMaterial, false);
+    all.set(key, { registry: createInstanceRegistry(CAPACITY[key]), meshes: [paintMesh, trimMesh, lampMesh], tinted: FLEET_KEYS.has(key) ? paintMesh : null, pickMesh: paintMesh });
   }
+  const person = personAsset('customer');
+  const clothes = pool('pedestrian', person.clothing, solid(), true);
+  const skin = pool('pedestrian', person.skin, solid(), true);
+  all.set('pedestrian', { registry: createInstanceRegistry(CAPACITY.pedestrian), meshes: [clothes, skin], tinted: clothes, pickMesh: clothes });
+
+  const beamMaterial = new MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0, blending: AdditiveBlending, depthWrite: false, fog: false, toneMapped: false });
+  const beams = new InstancedMesh(beamGeometry(), beamMaterial, BEAM_CAPACITY);
+  beams.instanceMatrix.setUsage(DynamicDrawUsage);
+  beams.count = 0;
+  beams.frustumCulled = false;
+  beams.renderOrder = 1;
+
+  const shadowMaterial = new MeshBasicMaterial({ vertexColors: true, transparent: true, blending: MultiplyBlending, premultipliedAlpha: true, depthWrite: false });
+  const shadows = new InstancedMesh(contactShadowGeometry(), shadowMaterial, SHADOW_CAPACITY);
+  shadows.instanceMatrix.setUsage(DynamicDrawUsage);
+  shadows.count = 0;
+  shadows.frustumCulled = false;
+  shadows.renderOrder = 1;
+
+  const beaconMaterial = new MeshBasicMaterial({ color: '#FFB020', toneMapped: false, transparent: true });
+  const beacon = new InstancedMesh(new CircleGeometry(0.9, 16).rotateX(-Math.PI / 2), beaconMaterial, 2);
+  beacon.count = 0;
+  beacon.frustumCulled = false;
+  group.add(beams, shadows, beacon);
 
   const poses = new Map<string, PoseSample>();
   const present = new Map<VisualKey, Set<string>>();
   const matrix = new Matrix4();
   const quat = new Quaternion();
+  const tilt = new Quaternion();
   const pos = new Vector3();
   const scale = new Vector3(1, 1, 1);
   const colour = new Color();
+  let night = 0;
+  let beaconOn = false;
+  let time = 0;
 
   return {
     group,
-    update(agents, interpolated) {
+    update(agents, interpolated, timeSec = 0) {
+      time = timeSec;
       poses.clear();
       for (const set of present.values()) set.clear();
+      let shadowCount = 0;
+      let lit = 0;
+      let beacons = 0;
       for (const a of agents) {
         const pose = interpolated.get(a.id) ?? { x: a.x, z: a.z, heading: a.heading };
         poses.set(a.id, pose);
@@ -169,14 +184,48 @@ export function createAgentLayer(palette: Palette): AgentLayer {
           present.set(key, set);
         }
         set.add(a.id);
-        matrix.compose(pos.set(pose.x, 0, pose.z), quat.setFromAxisAngle(UP, -pose.heading), scale);
+
+        quat.setFromAxisAngle(UP, -pose.heading);
+        let lift = 0;
+        if (key === 'pedestrian') {
+          const bob = walkBob(time, a.speed, (hash(a.id) % 628) / 100);
+          lift = bob.lift;
+          quat.multiply(tilt.setFromAxisAngle(new Vector3(1, 0, 0), bob.sway));
+        }
+        matrix.compose(pos.set(pose.x, lift, pose.z), quat, scale);
         for (const m of v.meshes) m.setMatrixAt(slot, matrix);
-        if (fresh && v.tintedIndex !== null) {
+        if (fresh && v.tinted) {
           const list = key === 'pedestrian' ? palette.peopleColours : palette.carPaints;
           colour.set(list[hash(a.id) % list.length] as string);
-          (v.meshes[v.tintedIndex] as InstancedMesh).setColorAt(slot, colour);
+          v.tinted.setColorAt(slot, colour);
+        } else if (fresh) {
+          for (const m of v.meshes) if (m.instanceColor) m.setColorAt(slot, WHITE);
+        }
+
+        if (shadowCount < SHADOW_CAPACITY) {
+          matrix.compose(pos.set(pose.x, 0.05, pose.z), quat.setFromAxisAngle(UP, -pose.heading), scale.set(a.length * 1.25, 1, a.width * 1.4));
+          shadows.setMatrixAt(shadowCount++, matrix);
+          scale.set(1, 1, 1);
+        }
+        if (night > 0.02 && lit < BEAM_CAPACITY && BEAM_KINDS.has(a.kind) && a.speed >= 0.3) {
+          const half = a.length / 2;
+          matrix.compose(pos.set(pose.x + Math.cos(pose.heading) * half, 0.09, pose.z + Math.sin(pose.heading) * half), quat.setFromAxisAngle(UP, -pose.heading), scale);
+          beams.setMatrixAt(lit++, matrix);
+        }
+        if (beaconOn && a.kind === 'tow' && beacons < 2) {
+          const flash = Math.sin(time * 12) > 0 ? 1 : 0.15;
+          matrix.compose(pos.set(pose.x, 2.62, pose.z), quat.identity(), scale.set(flash, 1, flash));
+          beacon.setMatrixAt(beacons++, matrix);
+          scale.set(1, 1, 1);
         }
       }
+      shadows.count = shadowCount;
+      shadows.instanceMatrix.needsUpdate = true;
+      beams.count = lit;
+      beams.instanceMatrix.needsUpdate = true;
+      beacon.count = beacons;
+      beacon.instanceMatrix.needsUpdate = true;
+
       for (const [key, v] of all) {
         const seen = present.get(key);
         for (let i = 0; i < v.registry.count; i++) {
@@ -194,7 +243,7 @@ export function createAgentLayer(palette: Palette): AgentLayer {
       }
     },
     pick(raycaster) {
-      const targets = [...all.values()].map((v) => v.meshes[v.pickIndex] as InstancedMesh);
+      const targets = [...all.values()].map((v) => v.pickMesh);
       for (const t of targets) t.computeBoundingSphere();
       const hit = raycaster.intersectObjects(targets, false)[0];
       if (hit?.instanceId === undefined) return null;
@@ -202,5 +251,18 @@ export function createAgentLayer(palette: Palette): AgentLayer {
       return key ? (all.get(key)?.registry.idAt(hit.instanceId) ?? null) : null;
     },
     poseOf: (id) => poses.get(id),
+    setNight(value) {
+      night = value;
+      beamMaterial.opacity = 0.55 * value;
+      beams.visible = value > 0.02;
+      // Lamps glow past 1.0 at night so bloom catches them; by day they read as plain lenses.
+      lampMaterial.color.setScalar(0.75 + 1.9 * value);
+    },
+    setBeacon(on) {
+      beaconOn = on;
+    },
+    setPalette() {
+      // Vehicle colours are baked into the Pixar-style assets and stay the same in both themes.
+    },
   };
 }

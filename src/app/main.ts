@@ -2,32 +2,47 @@ import { signal } from '@preact/signals';
 import { h, render } from 'preact';
 import { Raycaster, Vector2, Vector3 } from 'three';
 import { rates } from '../config/rates';
+import type { WeatherMode } from '../config/weather';
 import type { AreaId } from '../layout/hub';
 import { areaById, hubBounds, unitMarker, unitPose } from '../layout/positions';
 import { createAgentLayer } from '../render/agents';
+import { createAtmosphere } from '../render/atmosphere';
 import { createCameraRig } from '../render/camera';
 import type { CameraLimits } from '../render/cameraMath';
+import { environmentFor, type DayNight, type Environment } from '../render/environment';
+import { detailStates } from '../render/details';
 import { interpolateAgents, type PoseSample } from '../render/interp';
-import { darkPalette } from '../render/palette';
+import { darkPalette, lightPalette } from '../render/palette';
+import { createPostPipeline, postEffectsFor, type PostEffect } from '../render/post';
+import { createQualityController, settingsFor } from '../render/quality';
+import { createRain } from '../render/rain';
 import { createScene } from '../render/scene';
 import { createSelectionRing } from '../render/selection';
+import { createSkyView, skyColours } from '../render/sky';
 import { buildWorld } from '../render/world';
 import type { Vec2 } from '../sim/types';
 import { createSim, type Snapshot } from '../sim/world';
-import { unitLabel } from '../ui/format';
-import { App } from '../ui/m1/App';
+import { createAlertFeed } from '../ui/alerts';
+import { formatClock, unitLabel } from '../ui/format';
+import { createKpiTracker } from '../ui/kpis';
+import { Dashboard, type DashboardData, type Settings, type TableData } from '../ui/m2/Dashboard';
 import { createUiStore } from '../ui/store';
 import '../ui/styles.css';
+import { createCheckoutLog, fleetRows, queueRows } from '../ui/tables';
+import { loadTheme, saveTheme, type Theme, type ThemeStorage } from '../ui/theme';
 import { createThroughputTracker } from '../ui/throughput';
+import { createTimeline } from '../ui/timeline';
 import { createAccumulator } from './loop';
 import type { HubTestHooks } from './testHooks';
-import { notImplemented } from '../shared/notImplemented';
 import { hasWebGL2 } from './webgl';
 
 const CLICK_MAX_MOVE_PX = 5;
 const CLICK_MAX_MS = 300;
 const PICK_RADIUS_PX = 14;
+/** Panel, tracker and KPI refresh (architecture §5). */
 const PANEL_REFRESH_SEC = 0.1;
+/** Table refresh (architecture §5). */
+const TABLE_REFRESH_SEC = 0.25;
 const SELECT_DISTANCE = 90;
 
 function showFallback(root: HTMLElement): void {
@@ -40,18 +55,63 @@ function showFallback(root: HTMLElement): void {
   root.appendChild(box);
 }
 
+function safeStorage(): ThemeStorage | null {
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+const isTouch = (): boolean => typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+const prefersReducedMotion = (): boolean => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
 function start(root: HTMLElement): void {
-  const palette = darkPalette;
+  const storage = safeStorage();
+  let theme: Theme = loadTheme(storage);
+  document.documentElement.dataset.theme = theme;
+  const paletteFor = (t: Theme) => (t === 'light' ? lightPalette : darkPalette);
+
   const sim = createSim({ seed: 'goldlane' });
   const store = createUiStore();
   const throughput = createThroughputTracker();
+  const timeline = createTimeline();
+  const alertFeed = createAlertFeed();
+  const checkoutLog = createCheckoutLog();
+  const kpis = createKpiTracker();
 
-  const sceneHandle = createScene(root, palette);
-  const { renderer, scene, camera, canvas } = sceneHandle;
-  const world = buildWorld(palette);
-  const agents = createAgentLayer(palette);
-  const ring = createSelectionRing(palette);
-  scene.add(world.group, agents.group, ring.mesh);
+  const sceneHandle = createScene(root, paletteFor(theme));
+  const { renderer, scene, camera, canvas, hemi, sun } = sceneHandle;
+  renderer.info.autoReset = false;
+  const world = buildWorld(paletteFor(theme));
+  const agents = createAgentLayer(paletteFor(theme));
+  const ring = createSelectionRing(paletteFor(theme));
+  const rain = createRain();
+  const sky = createSkyView();
+  scene.add(sky.group, world.group, agents.group, ring.mesh, rain.mesh);
+  const atmosphere = createAtmosphere({ renderer, scene, hemi, sun, world, agents, rain }, paletteFor(theme));
+  atmosphere.setPalette(paletteFor(theme));
+  const post = createPostPipeline(renderer, scene, camera);
+  const resize = (): void => {
+    sceneHandle.resize();
+    const size = renderer.getSize(new Vector2());
+    post.setSize(size.x, size.y, renderer.getPixelRatio());
+  };
+
+  const quality = createQualityController({ touch: isTouch() });
+  const applyQuality = (tier: number): void => {
+    const q = settingsFor(tier);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, q.pixelRatioCap));
+    sun.castShadow = q.shadowMapSize > 0;
+    if (q.shadowMapSize > 0 && sun.shadow.mapSize.x !== q.shadowMapSize) {
+      sun.shadow.mapSize.set(q.shadowMapSize, q.shadowMapSize);
+      sun.shadow.map?.dispose();
+      sun.shadow.map = null;
+    }
+    resize();
+  };
+  let qualityTier = quality.tier;
+  applyQuality(qualityTier);
 
   const bounds = hubBounds(20);
   const limits: CameraLimits = { ...bounds, minDistance: 25, maxDistance: 600, minPolar: 0.35, maxPolar: 1.25 };
@@ -59,7 +119,7 @@ function start(root: HTMLElement): void {
   const overview = areaById('overview');
   rig.jump({ target: { x: overview.x, z: overview.z }, distance: overview.distance, azimuth: Math.PI / 4, polar: 0.85 });
 
-  // Overlay: Preact app plus a selection label positioned every frame (A7).
+  // Overlay: Preact dashboard plus a selection label positioned every frame (A7).
   const overlay = document.createElement('div');
   overlay.className = 'overlay';
   root.appendChild(overlay);
@@ -74,17 +134,81 @@ function start(root: HTMLElement): void {
   let prev: Snapshot = sim.snapshot();
   let curr: Snapshot = prev;
   let poses: Map<string, PoseSample> = interpolateAgents(prev.agents, curr.agents, 0);
-  const uiSnapshot = signal<Snapshot | null>(curr);
   throughput.observe(curr.resources, curr.simTimeSec);
+  kpis.observe(sim.metrics(), curr.simTimeSec);
+
+  let weatherMode: WeatherMode = curr.weather;
+  let dayNight: DayNight = 'auto';
+  const reducedMotion = prefersReducedMotion();
+  let environment: Environment = environmentFor(weatherMode, curr.clockHours, dayNight, { reducedMotion, qualityTier });
+
+  const clockAt = (t: number): string => formatClock((((curr.clockHours + (t - curr.simTimeSec) / 3600) % 24) + 24) % 24);
+
+  const dashboardData = (): DashboardData => {
+    const sel = store.selection.value;
+    const metrics = sim.metrics();
+    return {
+      snapshot: curr,
+      cards: kpis.cards(),
+      alerts: alertFeed.list(),
+      unread: alertFeed.unread(),
+      steps: sel?.kind === 'agent' && curr.agents.some((a) => a.id === sel.id && a.kind === 'fleet') ? timeline.stepsFor(sel.id) : null,
+      stageCounts: metrics.stageCounts,
+    };
+  };
+  const tableData = (): TableData => ({ fleet: fleetRows(curr), queue: queueRows(curr), checkouts: checkoutLog.rows() });
+
+  const data = signal<DashboardData>(dashboardData());
+  const tables = signal<TableData>(tableData());
+  const settings = signal<Settings>({ weather: weatherMode, dayNight, theme });
 
   const onArea = (id: AreaId): void => {
     // Switching area deselects, so "following ⇔ selected" stays true (architecture §14.1).
     store.clearSelection();
     store.setArea(id);
     const a = areaById(id);
-    rig.glideTo({ x: a.x, z: a.z }, a.distance);
+    rig.glideTo({ x: a.x, z: a.z }, a.distance, a.azimuth ?? (id === 'overview' ? Math.PI / 4 : undefined));
   };
-  render(h(App, { store, snapshot: uiSnapshot, throughput, onArea }), uiRoot);
+
+  render(
+    h(Dashboard, {
+      store,
+      data,
+      tables,
+      settings,
+      unitIds: world.unitIds,
+      throughput,
+      clockAt,
+      onArea,
+      onWeather: (mode: WeatherMode) => {
+        weatherMode = mode;
+        sim.apply({ type: 'setWeather', mode });
+        settings.value = { ...settings.value, weather: mode };
+      },
+      onDayNight: (value: DayNight) => {
+        dayNight = value;
+        settings.value = { ...settings.value, dayNight: value };
+      },
+      onTheme: (t: Theme) => {
+        theme = t;
+        saveTheme(storage, t);
+        document.documentElement.dataset.theme = t;
+        atmosphere.setPalette(paletteFor(t));
+        settings.value = { ...settings.value, theme: t };
+      },
+      onOpenAlerts: () => {
+        alertFeed.markAllRead();
+        data.value = dashboardData();
+      },
+      onPick: (r) => {
+        store.select({ kind: r.kind, id: r.id });
+      },
+      onSelectVehicle: (id: string) => {
+        store.select({ kind: 'agent', id });
+      },
+    }),
+    uiRoot,
+  );
 
   // ---------- selection ----------
 
@@ -100,6 +224,7 @@ function start(root: HTMLElement): void {
   };
 
   store.selection.subscribe((sel) => {
+    data.value = dashboardData();
     if (sel === null) {
       rig.setFollow(null);
       return;
@@ -166,36 +291,52 @@ function start(root: HTMLElement): void {
     if (moved <= CLICK_MAX_MOVE_PX && quick) pickAt(e.clientX, e.clientY);
   });
   window.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') store.clearSelection();
+    if (e.key === 'Escape' && !(e.target instanceof HTMLInputElement)) store.clearSelection();
   });
-  window.addEventListener('resize', () => {
-    sceneHandle.resize();
-  });
+  window.addEventListener('resize', resize);
 
   // ---------- loop (A3) ----------
 
   const accumulator = createAccumulator(rates.stepWallSec, 5);
   let last = performance.now();
   let panelClock = 0;
+  let tableClock = 0;
   let elapsed = 0;
   let ready = false;
   let drawCalls = 0;
+  let effects: readonly PostEffect[] = [];
+  let lampsLit = 0;
+  /** Set by the setQualityTier test hook: stops adaptive tier changes. */
+  let pinnedTier: number | null = null;
 
   const frame = (now: number): void => {
-    const dt = Math.min(0.25, Math.max(0, (now - last) / 1000));
+    const rawDt = Math.max(0, (now - last) / 1000);
+    const dt = Math.min(0.25, rawDt);
     last = now;
     elapsed += dt;
+
+    const tier = pinnedTier ?? quality.sample(rawDt);
+    if (tier !== qualityTier) {
+      qualityTier = tier;
+      applyQuality(tier);
+    }
+
     const { steps, alpha } = accumulator.push(dt);
     if (steps > 0) {
       for (let i = 0; i < steps - 1; i++) sim.step();
       prev = steps > 1 ? sim.snapshot() : curr;
       sim.step();
       curr = sim.snapshot();
-      sim.drainEvents();
+      const events = sim.drainEvents();
+      timeline.ingest(events);
+      alertFeed.ingest(events);
+      checkoutLog.ingest(events);
       throughput.observe(curr.resources, curr.simTimeSec);
     }
     poses = interpolateAgents(prev.agents, curr.agents, alpha);
-    agents.update(curr.agents, poses);
+    agents.update(curr.agents, poses, elapsed);
+    const details = detailStates(curr);
+    agents.setBeacon(details.towBeacon);
 
     const sel = store.selection.value;
     const selPos = sel ? positionOf(sel.id) : null;
@@ -212,14 +353,34 @@ function start(root: HTMLElement): void {
       label.hidden = true;
     }
 
-    rig.update(dt);
-    renderer.render(scene, camera);
+    // Camera glides are presentation only: run them on wall-clock time so they land on schedule even
+    // when a frame stalls (shader compiles, slow GPUs); the simulation keeps its 0.25 s cap.
+    rig.update(Math.min(1, rawDt));
+    environment = environmentFor(weatherMode, curr.clockHours, dayNight, { reducedMotion, qualityTier });
+    atmosphere.apply(environment, dt, rig.state().target);
+    const q = settingsFor(qualityTier);
+    world.update({ dt, wallTime: elapsed, reducedMotion, poolFraction: q.lampPoolFraction, details });
+    lampsLit = world.lampsLit();
+    // The dome follows the camera sideways so its horizon never comes closer; clouds stay put.
+    sky.group.position.set(camera.position.x, 0, camera.position.z);
+    sky.update(skyColours(environment, weatherMode), q.clouds, reducedMotion ? 0 : dt);
+
+    renderer.info.reset();
+    effects = postEffectsFor({ nightFactor: environment.nightFactor, qualityTier, shimmer: environment.shimmer });
+    post.render(effects, elapsed);
     drawCalls = renderer.info.render.calls;
 
     panelClock += dt;
+    tableClock += dt;
     if (panelClock >= PANEL_REFRESH_SEC) {
       panelClock = 0;
-      uiSnapshot.value = curr;
+      kpis.observe(sim.metrics(), curr.simTimeSec);
+      alertFeed.observeSnapshot(curr, rates.evStageSocPct);
+      data.value = dashboardData();
+    }
+    if (tableClock >= TABLE_REFRESH_SEC) {
+      tableClock = 0;
+      tables.value = tableData();
     }
     ready = true;
     requestAnimationFrame(frame);
@@ -247,11 +408,17 @@ function start(root: HTMLElement): void {
         return { x: a.x, z: a.z };
       },
       drawCalls: () => drawCalls,
-      // M2 hooks: wired in Stage 4.
-      weather: () => notImplemented(),
-      environment: () => notImplemented(),
-      theme: () => notImplemented(),
-      qualityTier: () => notImplemented(),
+      weather: () => curr.weather,
+      environment: () => environment,
+      theme: () => theme,
+      qualityTier: () => qualityTier,
+      postEffects: () => effects,
+      lampsLit: () => lampsLit,
+      setQualityTier(tier: number) {
+        pinnedTier = tier;
+        qualityTier = tier;
+        applyQuality(tier);
+      },
     };
     window.__hub = hooks;
   }

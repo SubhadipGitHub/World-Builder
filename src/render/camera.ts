@@ -6,8 +6,8 @@ import { clampState, followTarget, glideDuration, startGlide, stepGlide, type Ca
 export interface CameraRig {
   /** Call once per frame. */
   update(dt: number): void;
-  /** Eased flight to a ground point, optionally changing distance (I-2, I-5). */
-  glideTo(target: Vec2, distance?: number): void;
+  /** Eased flight to a ground point, optionally changing distance and azimuth (I-2, I-5). */
+  glideTo(target: Vec2, distance?: number, azimuth?: number): void;
   /** Follow a moving point until set to null (I-2). The point may be null while unknown. */
   setFollow(point: (() => Vec2 | null) | null): void;
   state(): CameraState;
@@ -74,9 +74,9 @@ export function createCameraRig(camera: PerspectiveCamera, dom: HTMLElement, lim
       if (p) s = followTarget(s, p, dt, FOLLOW_STIFFNESS);
       apply(clampState(s, limits));
     },
-    glideTo(target, distance) {
+    glideTo(target, distance, azimuth) {
       const from = read();
-      const to = clampState({ ...from, target, distance: distance ?? from.distance }, limits);
+      const to = clampState({ ...from, target, distance: distance ?? from.distance, azimuth: azimuth ?? from.azimuth }, limits);
       glide = startGlide(from, to, glideDuration(from, to, reducedMotion));
     },
     setFollow(point) {

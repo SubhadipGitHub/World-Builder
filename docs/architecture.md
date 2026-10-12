@@ -206,7 +206,7 @@ interface AgentView { id: string; kind: AgentKind; cls?: VehicleClass;
 4. ✅ Render: scene, builders (blockout), agent instancing, interpolation.
 5. ✅ Interaction: camera rig, picking, selection, M1 detail panel, area switcher. Then E2E.
 
-**M2 (blocks 4–5)**: glass UI shell, KPIs, tracker, table, search, alerts; then weather, day/night, theme, mobile bottom sheet; then performance tuning on the reference devices.
+**M2 (blocks 4–5)** ✅: glass UI shell, KPIs, tracker, table, search, alerts; then weather, day/night, theme, mobile bottom sheet; adaptive quality. *Remaining:* performance tuning on the real reference devices (N-8). It can't be verified in headless software rendering.
 
 ## 12. Approval record
 Approved 2026-10-12: A1–A10 (including Preact for UI and the simulation on the main thread), the traffic design in §4, the 400 KB gzipped bundle budget and the 90% coverage gate on `src/sim`.
@@ -296,7 +296,7 @@ Headless Chromium uses SwiftShader WebGL 2 (`playwright.config.ts`), verified on
 - Draw calls well under 150 (asserted in E2E). Coverage on `src/sim` is unchanged (97% statements, 91% branches).
 
 
-## 15. M2: dashboard and extras (Stage 3, awaiting approval)
+## 15. M2: dashboard and extras (approved 2026-10-12, implemented)
 
 ### 15.1 Data the dashboard needs, and where it comes from
 | Need | Source | Module |
@@ -361,3 +361,138 @@ The render loop drains sim events every frame into timeline, alerts and the chec
 | Unit | `ui/{kpis,timeline,alerts,tables,search,theme}.test.ts`, `render/{environment,quality}.test.ts`, `layout/positions.test.ts` (areaOf), `sim/world.test.ts` (agreementNo) | D-3, D-5, D-6, D-8, D-2, X-1, X-2, X-4, N-2 |
 | Unit (jsdom) | `ui/{TopBar,KpiCards,ProcessTracker,LiveTable}.test.tsx` | Component behaviour and accessibility |
 | E2E | `tests/e2e/m2.spec.ts` | Glass panels; KPIs visible; search → select and fly; table row → select; weather → sim and visuals; night → night factor; theme persists across reload; mobile 390 × 844 with no horizontal scroll and a bottom sheet; reduced motion turns shimmer off; draw calls < 150 in rain at night |
+
+### 15.7 Implementation notes (Stage 4, 2026-10-12)
+- **Approved choices:** Auto / Day / Night; weather as a native `<select>`; trend arrows against 5 simulated minutes ago with a ±0.5 dead band; clicking an alert selects its car; agreement numbers searchable while departing; the EV-below-threshold alert kept as a safety net; phone layout below 720 px.
+- **New render modules:**
+  - `render/atmosphere` applies `environmentFor()` each frame: sun, moon, ambient light, fog, background, wet asphalt, night glow, headlights and rain.
+  - `render/rain` is one instanced draw call of streaks around the camera target.
+  - `render/shimmer` is a heat-haze post pass (one extra draw call) on tier 0 with motion allowed. (M3: replaced by the shimmer pass in `render/post`, §16.7.)
+  - `world` and `agents` expose `setConditions` / `setNight` / `setPalette`.
+  - The light palette lives in `render/palette`.
+- **Contract additions:**
+  - `AreaLayout.azimuth` (optional). Areas are now viewed from the south, so their east–west layout runs across the uncovered middle of the screen rather than diagonally under the panels. Measured in E2E profiling: 22 of 22 facility units are on exposed canvas, up from 13.
+  - `CameraRig.glideTo(target, distance?, azimuth?)`.
+  - Area framings were retuned (return 130 m, wash 170 m, energy 150 m, lot 250 m).
+- **Bug fixed (would have shipped): the glass blur was missing in Chromium.** The CSS minifier treats `-webkit-backdrop-filter` and `backdrop-filter` as duplicates and keeps only the last; the prefixed form came last. The prefixed form now comes first, so both survive (verified in the built file). The E2E glass test caught it.
+- **Night readability:** soft moonlight and ambient light at night; lighter fog (rain 0.0015, overcast 0.0007, heat 0.0004); floodlight pools and headlight beams skip fog and tone mapping, and use radial vertex-colour falloff.
+- **Fleet table:** the location reads "On hub roads" outside every named area.
+- **M1 E2E tests updated for the dashboard:** the click tests now pick points where the canvas is exposed (`elementFromPoint`), since panels cover parts of the screen. The assertions are unchanged.
+- The M1 overlay `ui/m1/App.tsx` was replaced by `ui/m2/Dashboard.tsx` and removed.
+
+### 15.8 Verified results (2026-10-12)
+- 271 unit tests, 12 soak runs and 17 E2E tests (M1, M2 and dev server) pass; E2E was green on two consecutive full runs. Typecheck and lint are clean.
+- Production bundle: 184.5 KB gzipped (budget 400 KB), no test hooks. Coverage on `src/sim`: 97% statements, 91% branches.
+- Draw calls stay under 150 in rain at night (asserted).
+
+
+## 16. M3: premium visuals (design approved 2026-10-12; implemented, awaiting visual review)
+
+Implements requirements §8 (V-1…V-9, D9–D12). No simulation changes, and no external assets (W-1).
+
+### 16.1 Key techniques
+| # | Decision | Why |
+|---|---|---|
+| P1 | **Vertex colours instead of many materials.** Each asset is assembled from shapes whose colours are baked into a `color` attribute, then merged into one geometry with one `MeshStandardMaterial({ vertexColors })`. | Rich, multi-coloured Pixar-style models at about one draw call per asset type (budget §8.3). |
+| P2 | **Paint / trim / lamps split for instanced vehicles and people.** *Paint* takes per-instance colour (car paint, clothing); *trim* is vertex-coloured and untinted (tyres, glass, chrome, skin); *lamps* is an emissive mesh whose glow follows `nightFactor`. | `instanceColor` multiplies the whole mesh, so tinted and untinted parts must be separate meshes. |
+| P3 | **Shape kit** `render/kit/`: rounded box (three's `RoundedBoxGeometry`), capsule, lathe, cylinder, wedge; `paint(geometry, colour)` and `assemble(parts)` produce merged vertex-coloured geometry. | One vocabulary for every asset, so the style stays consistent (V-1). |
+| P4 | **Roadside lamps are generated from the lane graph** (`layout/lamps.ts`, pure). Spacing is about 25 m along each vehicle road, offset outside the road's corridor, on both sides of main roads. Lamps are skipped where they would fall inside any corridor, building or other lamp's spacing. | Lighting follows the roads automatically and never blocks traffic (V-6). |
+| P5 | **Staggered lamps via per-instance colour:** lamp heads (`MeshBasicMaterial`) and light pools (additive, radial falloff) take an instance colour of `lampLevel(nightFactor, i)`, where each lamp has a pseudo-random switch-on offset. | Lamps come on one by one at dusk at no extra draw-call cost (V-6). |
+| P6 | **Post-processing chain** (`render/post.ts`): `EffectComposer` → `RenderPass` → [`UnrealBloomPass` at night, tier 0] → [heat shimmer as a `ShaderPass`, tier 0, motion allowed] → `OutputPass`. With no effect active it falls back to a plain `renderer.render`. | One pipeline for bloom and shimmer (V-7, X-1). The fallback keeps lower tiers cheap. |
+| P7 | **Contact shadows:** one instanced radial "blob" decal under moving agents. Static props get blobs merged into the ground-detail mesh. | Grounded, soft Pixar look for about 2 draw calls (V-8). |
+| P8 | **Sky dome:** a large inverted sphere with a gradient `ShaderMaterial` (zenith, horizon, ground colours), plus a few instanced soft cloud puffs. `skyColours(env)` is pure. | Atmosphere that follows the day/night cycle and weather (V-4). |
+| P9 | **Live details from existing snapshot data:** `render/details.detailStates(snapshot)` (pure) maps resources and agents to which brushes spin, doors open, barriers lift, charger lights and the tow beacon. | Animation with zero simulation changes (V-9). |
+| P10 | **Footprint fidelity:** every vehicle and person asset must fit inside its simulation footprint (length × width from `config/facility`), within ±5%. | What you see matches what the no-overlap engine guarantees, so cars never visually clip (L-4). |
+
+### 16.2 Modules
+```
+src/render/kit/        shapes.ts (rounded box, capsule, lathe…), assemble.ts (paint, merge, vertex colours)
+src/render/assets/     vehicles.ts, people.ts, buildings.ts, landscape.ts, sky.ts, lamps.ts
+src/layout/lamps.ts    lamp placement from the lane graph (pure)
+src/render/details.ts  detailStates(snapshot) (pure) + the animator that applies them
+src/render/post.ts     composer: bloom, shimmer, output (replaces shimmer.ts)
+src/render/sky.ts      skyColours(env) (pure) + dome
+```
+`world.ts` and `agents.ts` keep their public API (`setConditions`, `setNight`, `setPalette`, `pick`, `pickUnit`) but build from the new assets. Picking and markers are unchanged.
+
+### 16.3 Performance plan (budget §8.3)
+| Group | Draw calls (top tier) |
+|---|---|
+| Ground, grass variation, kerbs, sidewalks, lane markings | ~6 |
+| Buildings (solid, glass, emissive, animated parts) | ~14 |
+| Trees and bushes (3 tree types + bushes, instanced) | ~5 |
+| Lamps (posts, heads, pools) | 3 |
+| Vehicles (3 car classes × paint/trim/lamps, plus shuttle, tow, van, cart, beams) | ~19 |
+| People (clothing + skin), contact shadows | 3 |
+| Sky dome and clouds; rain | 3 |
+| Shadow-map pass (re-draws shadow casters) | ~40 |
+| Post (bloom about 10 passes, output) | ~12 |
+| **Total** | **≈ 105–140**, well inside 300 |
+
+- **Tier 2** (lowest): no bloom, no shadows, half the lamp pools, clouds off. Expected ≤ 150 (asserted).
+- **Geometry:** rounded boxes use low segment counts (2–3), about 300–600 triangles per vehicle. The scene stays under about 400k triangles.
+- **Bundle:** the add-ons add about 40 KB unminified; asset code about 30 KB. Expected about 230–260 KB gzipped (budget 600).
+
+### 16.4 Test plan (Stage 3 preview)
+| Layer | What's tested |
+|---|---|
+| Unit | **Kit:** merged geometry has positions, normals and colours; `assemble` keeps the colours of each part. **Asset footprints (P10):** every vehicle and person bounding box is within ±5% of its simulation dimensions, wheels touch the ground (min y ≈ 0), and nothing is below ground. **`layout/lamps`:** spacing 25 m ± tolerance; no lamp inside any road corridor or building footprint; both sides of main roads; deterministic. **`lampLevel`:** 0 by day, 1 at full night, monotonic, staggered across lamps. **`skyColours`:** day brighter than night, rain greyer, deterministic. **`detailStates`:** brushes spin only for occupied, washing bays; doors open for occupied service bays; barriers up for an occupied gate; charger lights; tow beacon only while towing. |
+| E2E | Bundle ≤ 600 KB gzipped. Draw calls ≤ 300 at night with bloom on tier 0, and ≤ 150 on tier 2 (a test-only `setQualityTier` hook). Bloom on at night on tier 0 and off by day or on tier 2 (`postEffects()` hook). All lamps lit at full night and none by day (`lampsLit()` hook). The existing M1/M2 E2E suite still passes unchanged. |
+| Visual review | A screenshot set (day, golden hour, rain at night, light theme, phone) attached for your review, since beauty isn't unit-testable. |
+
+### 16.5 Risks
+| Risk | Mitigation |
+|---|---|
+| Too many triangles from rounded shapes | Low segment counts; a triangle-count assertion in a unit test per asset |
+| Bloom washes out the light theme or the daytime view | Bloom is gated to night × tier 0; threshold tuned so only emissive parts bloom |
+| Visual changes break picking or footprints | P10 footprint tests; picking meshes (paint) unchanged in role; M1 E2E click tests stay |
+| Scope creep in modelling | Each asset has a fixed part list in code review; polish passes are time-boxed |
+
+### 16.6 Stage 3 status (2026-10-12)
+- **Contracts:**
+  - `render/kit/{shapes,assemble}`
+  - `render/assets/{vehicles,people,buildings}`
+  - `layout/lamps`, `render/{lampLevel,sky,details,post}`
+  - `QualitySettings` extended with `bloom`, `clouds` and `lampPoolFraction`
+  - test hooks `postEffects()`, `lampsLit()` and `setQualityTier()`
+- **Failing tests:**
+  - 65 unit tests
+  - 4 E2E tests (lights on and off, the staggered switch-on, bloom with the 300 draw-call budget, the lowest tier within 150)
+- **Approved budget updates applied to existing E2E:** bundle ≤ 600 KB gzipped; top-tier draw calls ≤ 300.
+- **Lamp switching** is time-based (each lamp waits 0–3 s, then fades over 0.4 s), so the stagger also shows when the Night button flips the night factor instantly.
+
+### 16.7 Implementation notes (Stage 4, 2026-10-12)
+- **Modules as built** (small differences from §16.2):
+  - `render/landscape.ts`: grass, roads, kerbs, markings, the lot and seeded planting
+  - `render/lampsView.ts`: lamp poles, lenses and light pools
+  - the sky dome lives in `render/sky.ts` and the composer in `render/post.ts`
+  - `render/shimmer.ts` is removed
+- **`WorldHandle.update(frame)`** drives the lamps and the live details. `lampsLit()` feeds the test hook.
+- **`AgentLayer.update(…, timeSec)` and `setBeacon(on)`** add the walk bob and the tow beacon.
+- **Equipment fix:** the M1 unit markers stood in the exit lanes. Visible chargers, pumps and bollards now sit beside their bays. The invisible hit boxes stay at `unitMarker`, so picking and the selection label are unchanged.
+- **Colours that don't follow the theme:**
+  - Vehicle paint is the same in both themes.
+  - Grass has its own palette colour (`grass`): green in both themes, a little deeper in the dark one. Requirement V-4 asks for grass; tinting by `ground` gave black or pale-grey lawns.
+- **Night tuning after the screenshot review:**
+  - light pools peak at 0.32, with radius 6.5 m (street), 4 m (walkway) and 8.5 m (flood)
+  - canopy glass glow at night is 0.12
+- **Sky dome draw order:** drawn after the opaque scene with the depth test on, so only uncovered sky pixels are shaded. It follows the camera sideways; the clouds stay fixed in the world.
+- **Camera glides run on wall-clock time** (frame time capped at 1 s; the simulation keeps its 0.25 s cap). A glide therefore lands on time even when a frame stalls, for example while shaders recompile after a quality-tier change.
+- **E2E change:** the area-switch poll timeout in the M1 tests went from 5 s to 15 s. The assertion itself is unchanged.
+  - Under software WebGL (SwiftShader, 4–10 fps), the adaptive drop to tier 2 recompiles every shader, because the shadow defines change. That stalls frames for several seconds.
+  - The glide itself is still at most 2 s.
+
+### 16.8 Verified results (2026-10-12)
+- **Checks:** typecheck and lint are clean. 343 unit tests, 12 soak runs and 22 E2E tests (M1, M2, M3 and the dev server) pass.
+- **Production bundle:** 197.7 KB gzipped (budget 600 KB), with no test hooks.
+- **Measured draw calls (1280 × 800):**
+
+| Setting | Draw calls |
+|---|---|
+| Tier 0, day | 77 |
+| Tier 0, night with bloom | 94 |
+| Tier 2 | 48 |
+
+- **Triangles:** about 250k static plus about 2k per vehicle.
+- **Screenshots** for visual review: day overview and close-ups, night with bloom, rain at night, the light theme and a phone. There is no golden-hour shot: the UI offers only Auto, Day and Night, and the clock starts at 08:00.
+

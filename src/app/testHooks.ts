@@ -30,6 +30,12 @@ export interface HubTestHooks {
   theme(): Theme;
   /** Adaptive quality tier, 0 best … 2 lowest (N-2). */
   qualityTier(): number;
+  /** Post effects that ran in the last frame, e.g. ['bloom'] (V-7). */
+  postEffects(): readonly string[];
+  /** Mean brightness of all roadside lamps, 0 off … 1 all fully lit (V-6). */
+  lampsLit(): number;
+  /** Test only: pins the quality tier (stops adaptive changes). */
+  setQualityTier(tier: number): void;
 }
 
 declare global {

@@ -1,4 +1,3 @@
-import { notImplemented } from '../shared/notImplemented';
 import { hub, hubGraph, type AreaId, type AreaLayout, type UnitLayout } from './hub';
 
 export interface Pose {
@@ -79,5 +78,17 @@ export function areaById(id: AreaId): AreaLayout {
  * the nearest non-overview area within 70 m of its centre, otherwise 'overview'.
  */
 export function areaOf(x: number, z: number): AreaId {
-  return notImplemented(x, z);
+  let best: AreaId = 'overview';
+  let bestDist = AREA_RADIUS;
+  for (const a of hub.areas) {
+    if (a.id === 'overview') continue;
+    const d = Math.hypot(a.x - x, a.z - z);
+    if (d <= bestDist) {
+      best = a.id;
+      bestDist = d;
+    }
+  }
+  return best;
 }
+
+const AREA_RADIUS = 70;

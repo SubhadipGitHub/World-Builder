@@ -9,9 +9,9 @@ const feed = (q: ReturnType<typeof createQualityController>, frameSec: number, s
 
 describe('settingsFor (N-2)', () => {
   it('lowers pixel ratio, shadows and effects by tier', () => {
-    expect(settingsFor(0)).toEqual({ pixelRatioCap: 2, shadowMapSize: 2048, shimmer: true });
-    expect(settingsFor(1)).toEqual({ pixelRatioCap: 1.5, shadowMapSize: 1024, shimmer: false });
-    expect(settingsFor(2)).toEqual({ pixelRatioCap: 1, shadowMapSize: 0, shimmer: false });
+    expect(settingsFor(0)).toEqual({ pixelRatioCap: 2, shadowMapSize: 2048, shimmer: true, bloom: true, clouds: true, lampPoolFraction: 1 });
+    expect(settingsFor(1)).toEqual({ pixelRatioCap: 1.5, shadowMapSize: 1024, shimmer: false, bloom: false, clouds: true, lampPoolFraction: 1 });
+    expect(settingsFor(2)).toEqual({ pixelRatioCap: 1, shadowMapSize: 0, shimmer: false, bloom: false, clouds: false, lampPoolFraction: 0.5 });
   });
 });
 

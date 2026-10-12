@@ -1,6 +1,6 @@
 import type { JSX } from 'preact';
-import { notImplemented } from '../../shared/notImplemented';
-import type { TrackerStage } from '../../sim/lifecycle';
+import { TRACKER_STAGES, type TrackerStage } from '../../sim/lifecycle';
+import { stageLabel } from '../format';
 import type { TimelineStep } from '../timeline';
 
 export interface ProcessTrackerProps {
@@ -21,6 +21,29 @@ export interface ProcessTrackerProps {
  *    step not yet reached has aria-current="step" (the last step once all are done).
  *  - None selected: heading "Process tracker · all vehicles"; each step shows its vehicle count.
  */
-export function ProcessTracker(props: ProcessTrackerProps): JSX.Element {
-  return notImplemented(props);
+export function ProcessTracker({ vehicleId, steps, stageCounts, clockAt }: ProcessTrackerProps): JSX.Element {
+  const selected = vehicleId !== null && steps !== null;
+  let current = -1;
+  if (selected) {
+    current = steps.findIndex((s) => s.at === null);
+    if (current < 0) current = steps.length - 1;
+  }
+  return (
+    <section class="panel glass tracker" aria-label="Process tracker">
+      <h2>Process tracker · {selected ? vehicleId : 'all vehicles'}</h2>
+      <ol>
+        {TRACKER_STAGES.map((stage, i) => {
+          const at = selected ? (steps[i]?.at ?? null) : null;
+          const done = selected && at !== null;
+          return (
+            <li key={stage} class={done ? 'done' : ''} aria-current={i === current ? 'step' : undefined}>
+              <span class="step-dot" aria-hidden="true" />
+              <span class="step-label">{stageLabel(stage)}</span>
+              <span class="step-value">{selected ? (at !== null ? clockAt(at) : '—') : String(stageCounts?.[stage] ?? 0)}</span>
+            </li>
+          );
+        })}
+      </ol>
+    </section>
+  );
 }

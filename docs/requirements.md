@@ -16,6 +16,10 @@
 | D6 | Theme | **Dark first** (graphite), with a **light toggle**. |
 | D7 | Night | Weather mode is **Overcast** only. Night visuals come from the day/night cycle, so any weather can happen at night. |
 | D8 | Utilisation KPI | **On rent ÷ total fleet**, with a sub-line showing Ready count · In-turnaround count. |
+| D9 | M3 asset style (2026-10-12) | **Procedural Pixar-style**: every asset is still built in code (W-1 unchanged, no model or texture files), redesigned with rounded, bevelled, chunky, characterful forms. |
+| D10 | M3 lighting (2026-10-12) | **Roadside street lights with light pools, plus a soft bloom glow at night** on the top quality tier; bloom turns off automatically on lower tiers. |
+| D11 | M3 scope (2026-10-12) | **Vehicles, buildings, landscape and people.** |
+| D12 | M3 budgets (2026-10-12) | **Relaxed for visuals** (§8.3). Phone performance is revisited after real-device testing. |
 
 > Note on D2: the pack loads Three.js "from a CDN". We bundle it inline instead. The result is still one HTML file and it works offline.
 
@@ -147,3 +151,69 @@ All resolved:
 - As an **ops manager** (M2), I glance at turnaround time, utilisation and EV SoC to see whether the hub is keeping up with demand.
 - As an **ops manager** (M2), I see an alert when a car is flagged for maintenance, click it, and follow the tow truck.
 - As a **viewer** (M2), I switch to Heavy rain or Heatwave and see the world and its KPIs react: traffic slows in the rain, and queues build in the heatwave.
+
+## 8. M3: Premium visuals (APPROVED 2026-10-12)
+
+Goal: a premium, Pixar-style living diorama with warm roadside lighting at night, without changing what the hub *does*. The simulation, dashboard and interaction requirements above are unchanged. Everything stays procedural and in one offline file (W-1, N-1).
+
+### 8.1 Visual requirements
+- **V-1 Style kit.** A shared library of shapes (rounded and bevelled boxes, capsules, lathe forms, rounded windows) and a warmer, more saturated palette. Proportions are chunky and toy-like, with soft, rounded edges throughout. GoldLane amber gold stays the single accent (W-3).
+- **V-2 Vehicles.** Each class has a distinct, recognisable silhouette with no real-brand cues (N-7):
+  - **Fleet cars:** a rounded body, a glass cabin with window frames, 4 wheels with hubcaps, headlights, and red taillights.
+    - **Sedan:** low, three-box shape.
+    - **SUV:** tall, boxy, with roof rails.
+    - **EV crossover:** smooth front with a light bar.
+  - **Shuttle bus:** rounded, with a row of windows, a gold livery stripe and a roof unit.
+  - **Tow truck:** cab, flatbed and an amber roof beacon (flashing while towing).
+  - **Technician carts:** canopy and seats.
+  - **Service van:** with a GoldLane stripe.
+  - At night, headlights and taillights glow. Cars stay instanced, one draw call per part per class (architecture §6).
+- **V-3 Buildings.** Bays must stay visible from above, through cutaway, glass or open-frame roofs.
+  - **Terminal:** glass curtain wall with mullions, an entrance canopy, rooftop units, a GoldLane sign panel with the logo mark (no fonts needed), and planters.
+  - **Return canopy:** skylit roof, with a kiosk pod and screen on each lane.
+  - **Wash tunnel:** entry and exit arches, plus brushes that spin while a car is washing.
+  - **Service garage:** 3 roll-up doors that open while a bay is occupied.
+  - **EV hub and fuel station:** solar-panel canopies; charger pillars with cables and a status light (green while charging); pumps with displays.
+  - **Exit gates:** a booth with windows, and barrier arms that lift when a car passes.
+  - **Tow depot:** a small garage.
+- **V-4 Landscape.**
+  - Grass, with subtle colour variation, around paved areas.
+  - Kerbs and sidewalks along roads; lane markings (dashed centre lines, direction arrows).
+  - Varied trees (round, conifer, palm) in groups, plus bushes and planters.
+  - A gradient sky dome with a few soft clouds, and a distant horizon. It follows the day/night cycle and weather.
+- **V-5 People.** Pixar-style characters: head, body, arms and legs, with a simple walk bob and varied clothing colours. Staff wear gold hi-vis vests.
+- **V-6 Roadside lighting.**
+  - Lamp posts along every vehicle road and the walkway, about every 25 m. Main roads have them on both sides.
+  - Each lamp lights a warm pool with a radial falloff on the ground; the Ready lot has floodlights.
+  - Lamps switch on at dusk, staggered over a few seconds, rather than all at once, and switch off at dawn (X-2).
+- **V-7 Bloom.** At night, a soft glow around lamps, headlights, signage and windows. On the top quality tier only; it turns off on lower tiers and on touch devices by default.
+- **V-8 Lighting finish.**
+  - A warmer key light and a soft fill.
+  - Contact shadows: soft dark "blob" shadows under vehicles, people, trees and props, so things sit on the ground.
+  - Softer shadow edges.
+- **V-9 Live details,** driven by simulation state that already exists (no simulation changes):
+  - wash brushes spin while a bay is in use
+  - garage doors open for occupied service bays
+  - charger lights show charging or idle
+  - gate barriers lift for the car at the gate
+  - the tow beacon flashes while towing
+
+### 8.2 Unchanged
+- W-1: still no external model or texture files.
+- N-1: one offline file.
+- N-5: accessibility. Reduced motion stops brush and beacon animation, and stops the lamp stagger.
+- N-7: no real brands.
+- All interaction, dashboard and simulation requirements and tests stay as they are.
+
+### 8.3 Budgets (D12, approved 2026-10-12)
+| Budget | Was | Now |
+|---|---|---|
+| Single file, gzipped (N-1, A10) | ≤ 400 KB | **≤ 600 KB** |
+| Draw calls, top tier (N-2) | < 150 | **≤ 300** |
+| Draw calls, tier 2 (lowest) | < 150 | **≤ 150**, kept as the floor for weak devices |
+| Desktop frame rate (N-2) | 60 fps | 60 fps target, unchanged |
+| Phone frame rate (N-2) | ≥ 30 fps | **Deferred**: revisited after real-device testing; quality tiers still apply |
+
+### 8.4 Resolved
+- The hub still opens at **08:00**, as now. Street lights first appear at dusk (about 30 real minutes in), or straight away with the Night button.
+- The budget numbers in §8.3 are approved.

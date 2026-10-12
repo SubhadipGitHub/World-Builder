@@ -1,4 +1,3 @@
-import { notImplemented } from '../shared/notImplemented';
 import type { WeatherMode } from '../config/weather';
 
 export type DayNight = 'auto' | 'day' | 'night';
@@ -28,6 +27,28 @@ export interface EnvironmentOptions {
   readonly qualityTier: number;
 }
 
+const SUNRISE = 6;
+const SUNSET = 19;
+const clamp01 = (v: number): number => Math.min(1, Math.max(0, v));
+
+/** Night factor for a clock time: 1 h linear blends centred on sunrise and sunset. */
+function nightAt(h: number): number {
+  return h < 12 ? clamp01(SUNRISE + 0.5 - h) : clamp01(h - (SUNSET - 0.5));
+}
+
+interface WeatherLight {
+  readonly sun: number;
+  readonly ambient: number;
+  readonly fog: number;
+}
+
+const WEATHER_LIGHT: Readonly<Record<WeatherMode, WeatherLight>> = {
+  clear: { sun: 1, ambient: 1, fog: 0 },
+  overcast: { sun: 0.45, ambient: 1.1, fog: 0.0007 },
+  rain: { sun: 0.3, ambient: 0.9, fog: 0.0015 },
+  heatwave: { sun: 1.25, ambient: 1, fog: 0.0004 },
+};
+
 /**
  * Lighting and weather parameters (X-1, X-2), a pure function of the inputs:
  *  - clear: baseline; overcast: weaker sun, more ambient, light haze; rain: dim, fog, wet;
@@ -35,5 +56,22 @@ export interface EnvironmentOptions {
  *  - night lowers sun and ambient light and raises nightFactor in every weather.
  */
 export function environmentFor(weather: WeatherMode, clockHours: number, dayNight: DayNight, options: EnvironmentOptions): Environment {
-  return notImplemented(weather, clockHours, dayNight, options);
+  const hours = dayNight === 'day' ? 12 : dayNight === 'night' ? 22 : clockHours;
+  const nightFactor = nightAt(hours);
+  const w = WEATHER_LIGHT[weather];
+  const day = 1 - nightFactor;
+  const heat = weather === 'heatwave';
+  return {
+    hours,
+    nightFactor,
+    sunElevation: 1.1 * Math.sin((Math.PI * (hours - SUNRISE)) / (SUNSET - SUNRISE)),
+    // Night keeps soft moonlight and ambient so the hub stays readable after tone mapping.
+    sunIntensity: 2.6 * w.sun * day + 0.45 * nightFactor,
+    ambientIntensity: 1.6 * w.ambient * day + 0.8 * nightFactor,
+    fogDensity: w.fog,
+    wetness: weather === 'rain' ? 1 : 0,
+    rain: weather === 'rain',
+    heat,
+    shimmer: heat && !options.reducedMotion && options.qualityTier === 0,
+  };
 }

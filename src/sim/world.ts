@@ -922,7 +922,7 @@ export function createSim(config: SimConfig): Sim {
       state: v.state,
       stage: v.stage,
       plate: v.plate,
-      agreementNo: null,
+      agreementNo: v.state === 'departing' ? v.agreementNo : null,
       fuelPct: v.fuelPct,
       socPct: v.socPct,
       odometerMi: v.odometerMi,

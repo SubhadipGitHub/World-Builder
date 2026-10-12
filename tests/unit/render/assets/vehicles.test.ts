@@ -1,0 +1,75 @@
+import { describe, expect, it } from 'vitest';
+import { dimensions } from '../../../../src/config/facility';
+import { vehicleAsset, type VehicleAssetKind } from '../../../../src/render/assets/vehicles';
+import { triangleCount } from '../../../../src/render/kit/assemble';
+import { darkPalette } from '../../../../src/render/palette';
+import { colours, extent, positions } from '../kit/helpers';
+
+const HEIGHTS: Readonly<Record<VehicleAssetKind, readonly [number, number]>> = {
+  sedan: [1.25, 1.7],
+  suv: [1.6, 2.1],
+  ev: [1.4, 1.8],
+  shuttle: [2.6, 3.4],
+  tow: [2.2, 3.0],
+  van: [1.9, 2.6],
+  cart: [1.6, 2.3],
+};
+const KINDS = Object.keys(HEIGHTS) as VehicleAssetKind[];
+
+describe('vehicleAsset: footprint fidelity (P10, L-4)', () => {
+  for (const kind of KINDS) {
+    it(`${kind} fits its simulation footprint and stands on the ground`, () => {
+      const a = vehicleAsset(kind, darkPalette);
+      const e = extent(a.paint, a.trim, a.lamps);
+      const { length: l, width: w } = dimensions[kind];
+      expect(e.size.x).toBeGreaterThanOrEqual(0.95 * l);
+      expect(e.size.x).toBeLessThanOrEqual(1.05 * l);
+      expect(Math.abs(e.center.x)).toBeLessThanOrEqual(0.05 * l);
+      expect(e.size.z).toBeGreaterThanOrEqual(0.85 * w);
+      expect(e.size.z).toBeLessThanOrEqual(1.05 * w);
+      expect(Math.abs(e.center.z)).toBeLessThanOrEqual(0.05 * w);
+      expect(e.min.y).toBeGreaterThanOrEqual(-0.001);
+      expect(e.min.y).toBeLessThanOrEqual(0.06);
+      expect(e.size.y).toBeGreaterThanOrEqual(HEIGHTS[kind][0]);
+      expect(e.size.y).toBeLessThanOrEqual(HEIGHTS[kind][1]);
+    });
+  }
+});
+
+describe('vehicleAsset: parts (V-2, P2)', () => {
+  for (const kind of KINDS) {
+    it(`${kind} has coloured paint, trim and lamps within the triangle budget`, () => {
+      const a = vehicleAsset(kind, darkPalette);
+      for (const part of [a.paint, a.trim, a.lamps]) expect(part.getAttribute('color').count).toBeGreaterThan(0);
+      expect(triangleCount(a.paint) + triangleCount(a.trim) + triangleCount(a.lamps)).toBeLessThanOrEqual(2500);
+    });
+
+    it(`${kind} has warm headlights at the front and red taillights at the back`, () => {
+      const lamps = vehicleAsset(kind, darkPalette).lamps;
+      const ps = positions(lamps);
+      const cs = colours(lamps);
+      const front = ps.filter((_, i) => (cs[i]?.[1] ?? 0) > 0.55);
+      const back = ps.filter((_, i) => (cs[i]?.[0] ?? 0) > 0.5 && (cs[i]?.[1] ?? 1) < 0.3);
+      expect(front.length).toBeGreaterThan(0);
+      expect(back.length).toBeGreaterThan(0);
+      const meanX = (pts: [number, number, number][]): number => pts.reduce((s, p) => s + p[0], 0) / pts.length;
+      expect(meanX(front)).toBeGreaterThan(0);
+      expect(meanX(back)).toBeLessThan(0);
+    });
+  }
+
+  it('paints fleet bodies white so each car takes its own instance colour', () => {
+    for (const kind of ['sedan', 'suv', 'ev'] as const) {
+      for (const c of colours(vehicleAsset(kind, darkPalette).paint)) expect(c).toEqual([1, 1, 1]);
+    }
+  });
+
+  it('gives each fleet class a distinct silhouette', () => {
+    const h = (k: VehicleAssetKind) => {
+      const a = vehicleAsset(k, darkPalette);
+      return extent(a.paint, a.trim, a.lamps).size.y;
+    };
+    expect(h('suv') - h('sedan')).toBeGreaterThanOrEqual(0.15);
+    expect(Math.abs(h('ev') - h('sedan'))).toBeGreaterThanOrEqual(0.05);
+  });
+});

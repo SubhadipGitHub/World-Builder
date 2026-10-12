@@ -1,11 +1,14 @@
 import type { JSX } from 'preact';
-import type { WeatherMode } from '../../config/weather';
+import { useState } from 'preact/hooks';
+import { brand } from '../../config/brand';
+import { weather as weatherTable, weatherModes, type WeatherMode } from '../../config/weather';
 import type { AreaId, AreaLayout } from '../../layout/hub';
 import type { DayNight } from '../../render/environment';
-import { notImplemented } from '../../shared/notImplemented';
 import type { Snapshot } from '../../sim/world';
 import type { Alert } from '../alerts';
-import type { SearchResult } from '../search';
+import { formatClock } from '../format';
+import { AreaSwitcher } from '../m1/AreaSwitcher';
+import { search, type SearchResult } from '../search';
 import type { Theme } from '../theme';
 
 export interface TopBarProps {
@@ -28,6 +31,14 @@ export interface TopBarProps {
   readonly onPick: (result: SearchResult) => void;
 }
 
+const DAY_NIGHT: readonly { readonly value: DayNight; readonly label: string }[] = [
+  { value: 'auto', label: 'Auto' },
+  { value: 'day', label: 'Day' },
+  { value: 'night', label: 'Night' },
+];
+
+const LISTBOX_ID = 'search-results';
+
 /**
  * Top bar (D-2), a glass panel:
  *  - brand: app name and hub name
@@ -41,5 +52,197 @@ export interface TopBarProps {
  *  - user: button labelled "User menu"; its menu holds role="switch" "Light theme" (aria-checked) (X-4)
  */
 export function TopBar(props: TopBarProps): JSX.Element {
-  return notImplemented(props);
+  const [query, setQuery] = useState('');
+  const [active, setActive] = useState(-1);
+  const [alertsOpen, setAlertsOpen] = useState(false);
+  const [userOpen, setUserOpen] = useState(false);
+
+  const results = props.snapshot ? search(query, props.snapshot, props.unitIds) : [];
+  const open = results.length > 0;
+
+  const pick = (r: SearchResult | undefined): void => {
+    if (!r) return;
+    props.onPick(r);
+    setQuery('');
+    setActive(-1);
+  };
+
+  const onKeyDown = (e: KeyboardEvent): void => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setActive((i) => Math.min(i + 1, results.length - 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setActive((i) => Math.max(i - 1, 0));
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      pick(results[active >= 0 ? active : 0]);
+    } else if (e.key === 'Escape') {
+      setQuery('');
+      setActive(-1);
+    }
+  };
+
+  return (
+    <header class="panel glass top-bar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true" />
+        <div>
+          <p class="brand-name">{brand.appName}</p>
+          <p class="brand-sub">{brand.hubName}</p>
+        </div>
+      </div>
+
+      <div class="search">
+        <input
+          type="search"
+          role="combobox"
+          list={undefined}
+          aria-label="Search vehicles, plates, agreements or bays"
+          aria-expanded={open ? 'true' : 'false'}
+          aria-controls={LISTBOX_ID}
+          aria-autocomplete="list"
+          aria-activedescendant={open && active >= 0 ? `search-option-${String(active)}` : undefined}
+          placeholder="Search ID, plate, agreement, bay"
+          value={query}
+          onInput={(e) => {
+            setQuery(e.currentTarget.value);
+            setActive(-1);
+          }}
+          onKeyDown={onKeyDown}
+        />
+        {open ? (
+          <ul id={LISTBOX_ID} role="listbox" class="panel glass search-results">
+            {results.map((r, i) => (
+              <li
+                key={`${r.kind}:${r.id}`}
+                id={`search-option-${String(i)}`}
+                role="option"
+                aria-selected={i === active ? 'true' : 'false'}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                }}
+                onClick={() => {
+                  pick(r);
+                }}
+              >
+                <span class="result-label">{r.label}</span>
+                <span class="result-detail">{r.detail}</span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
+
+      <AreaSwitcher areas={props.areas} active={props.activeArea} onSelect={props.onArea} />
+
+      <div class="controls">
+        <select
+          aria-label="Weather"
+          value={props.weather}
+          onChange={(e) => {
+            props.onWeather(e.currentTarget.value as WeatherMode);
+          }}
+        >
+          {weatherModes.map((m) => (
+            <option key={m} value={m}>
+              {weatherTable[m].label}
+            </option>
+          ))}
+        </select>
+
+        <div role="group" aria-label="Time of day" class="segmented">
+          {DAY_NIGHT.map((d) => (
+            <button
+              key={d.value}
+              type="button"
+              aria-pressed={props.dayNight === d.value ? 'true' : 'false'}
+              onClick={() => {
+                props.onDayNight(d.value);
+              }}
+            >
+              {d.label}
+            </button>
+          ))}
+        </div>
+
+        <time class="clock" aria-label="Hub time">
+          {props.snapshot ? formatClock(props.snapshot.clockHours) : '--:--'}
+        </time>
+
+        <div class="menu-anchor">
+          <button
+            type="button"
+            class="icon-button alerts-button"
+            aria-label={`Alerts, ${String(props.unread)} unread`}
+            aria-expanded={alertsOpen ? 'true' : 'false'}
+            onClick={() => {
+              if (!alertsOpen) props.onOpenAlerts();
+              setAlertsOpen(!alertsOpen);
+              setUserOpen(false);
+            }}
+          >
+            <span aria-hidden="true">🔔</span>
+            {props.unread > 0 ? (
+              <span class="badge" aria-hidden="true">
+                {props.unread}
+              </span>
+            ) : null}
+          </button>
+          {alertsOpen ? (
+            <div class="panel glass menu alerts-menu">
+              {props.alerts.length === 0 ? <p class="note">No alerts</p> : null}
+              <ul role="list">
+                {props.alerts.map((a) => (
+                  <li key={a.id}>
+                    <button
+                      type="button"
+                      class={`alert alert-${a.severity}`}
+                      onClick={() => {
+                        props.onAlert(a);
+                        setAlertsOpen(false);
+                      }}
+                    >
+                      {a.message}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </div>
+
+        <div class="menu-anchor">
+          <button
+            type="button"
+            class="user-chip"
+            aria-label="User menu"
+            aria-expanded={userOpen ? 'true' : 'false'}
+            onClick={() => {
+              setUserOpen(!userOpen);
+              setAlertsOpen(false);
+            }}
+          >
+            <span aria-hidden="true">OP</span>
+          </button>
+          {userOpen ? (
+            <div class="panel glass menu user-menu">
+              <p class="note">Operations · Shift lead</p>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={props.theme === 'light' ? 'true' : 'false'}
+                class="switch"
+                onClick={() => {
+                  props.onTheme(props.theme === 'light' ? 'dark' : 'light');
+                }}
+              >
+                Light theme
+              </button>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </header>
+  );
 }

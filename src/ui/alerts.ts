@@ -1,4 +1,3 @@
-import { notImplemented } from '../shared/notImplemented';
 import type { SimEvent } from '../sim/events';
 import type { Snapshot } from '../sim/world';
 
@@ -29,6 +28,60 @@ export interface AlertFeed {
   markAllRead(): void;
 }
 
-export function createAlertFeed(max?: number): AlertFeed {
-  return notImplemented(max);
+const STATIONS: Readonly<Record<string, string>> = {
+  wash: 'Wash',
+  service: 'Service',
+  charger: 'EV charger',
+  pump: 'Fuel pump',
+  slot: 'Ready lot',
+  gate: 'Exit gate',
+};
+
+export function createAlertFeed(max = 50): AlertFeed {
+  let alerts: Alert[] = [];
+  let unread = 0;
+  let counter = 0;
+  const lowEvs = new Set<string>();
+
+  const push = (severity: AlertSeverity, message: string, vehicleId: string | null, simTimeSec: number): void => {
+    alerts.unshift({ id: `alert-${String(++counter)}`, severity, message, vehicleId, simTimeSec });
+    if (alerts.length > max) alerts = alerts.slice(0, max);
+    unread++;
+  };
+
+  return {
+    ingest(events) {
+      for (const e of events) {
+        switch (e.type) {
+          case 'maintenanceFlagged':
+            if (e.severe) push('critical', `Severe damage on ${e.vehicleId} — tow requested`, e.vehicleId, e.simTimeSec);
+            else push('warning', `Maintenance: ${e.reason} on ${e.vehicleId}`, e.vehicleId, e.simTimeSec);
+            break;
+          case 'towDispatched':
+            push('info', `Tow truck dispatched for ${e.vehicleId}`, e.vehicleId, e.simTimeSec);
+            break;
+          case 'queueOverflow':
+            push('warning', `${STATIONS[e.resource] ?? e.resource} queue at ${String(e.length)} cars`, null, e.simTimeSec);
+            break;
+          default:
+            break;
+        }
+      }
+    },
+    observeSnapshot(snapshot, threshold) {
+      const lowNow = new Set<string>();
+      for (const a of snapshot.agents) {
+        if (a.kind !== 'fleet' || a.cls !== 'ev' || a.state !== 'staged' || a.socPct === null || a.socPct >= threshold) continue;
+        lowNow.add(a.id);
+        if (!lowEvs.has(a.id)) push('warning', `${a.id} staged at ${String(Math.round(a.socPct))}% charge`, a.id, snapshot.simTimeSec);
+      }
+      lowEvs.clear();
+      for (const id of lowNow) lowEvs.add(id);
+    },
+    list: () => alerts,
+    unread: () => Math.min(unread, alerts.length),
+    markAllRead() {
+      unread = 0;
+    },
+  };
 }

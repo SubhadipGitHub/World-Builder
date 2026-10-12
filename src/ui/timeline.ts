@@ -1,6 +1,5 @@
-import { notImplemented } from '../shared/notImplemented';
 import type { SimEvent } from '../sim/events';
-import type { TrackerStage } from '../sim/lifecycle';
+import { TRACKER_STAGES, type TrackerStage } from '../sim/lifecycle';
 
 export interface TimelineStep {
   readonly stage: TrackerStage;
@@ -16,5 +15,22 @@ export interface Timeline {
 }
 
 export function createTimeline(): Timeline {
-  return notImplemented();
+  const cycles = new Map<string, Map<TrackerStage, number>>();
+  return {
+    ingest(events) {
+      for (const e of events) {
+        if (e.type !== 'milestone') continue;
+        let cycle = cycles.get(e.vehicleId);
+        if (!cycle || e.stage === 'returned') {
+          cycle = new Map();
+          cycles.set(e.vehicleId, cycle);
+        }
+        cycle.set(e.stage, e.simTimeSec);
+      }
+    },
+    stepsFor(vehicleId) {
+      const cycle = cycles.get(vehicleId);
+      return TRACKER_STAGES.map((stage) => ({ stage, at: cycle?.get(stage) ?? null }));
+    },
+  };
 }

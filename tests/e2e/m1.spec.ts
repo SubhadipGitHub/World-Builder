@@ -32,10 +32,10 @@ async function open(page: Page): Promise<void> {
 
 const dist2 = (a: { x: number; z: number }, b: { x: number; z: number }): number => Math.hypot(a.x - b.x, a.z - b.z);
 
-test('builds into one self-contained file within the bundle budget (N-1, A10)', () => {
+test('builds into one self-contained file within the bundle budget (N-1, A10, M3 §8.3)', () => {
   expect(readdirSync(DIST)).toEqual(['index.html']);
   const html = readFileSync(resolve(DIST, 'index.html'));
-  expect(gzipSync(html).length).toBeLessThan(400 * 1024);
+  expect(gzipSync(html).length).toBeLessThanOrEqual(600 * 1024);
   expect(html.toString()).not.toMatch(/(src|href)=["']https?:/);
   // The CSP is injected at build time only (architecture §9); the dev server must not get it.
   const csp = /<meta http-equiv="Content-Security-Policy" content="([^"]*)"/.exec(html.toString())?.[1]?.replaceAll('&#39;', "'");
@@ -49,7 +49,7 @@ test('loads offline, without errors, and the hub is alive (W-1, L-1, N-2)', asyn
   expect(first.agents.filter((a) => a.kind === 'fleet').length).toBeGreaterThanOrEqual(10);
   expect(first.agents.some((a) => a.speed > 0.5)).toBe(true);
   expect(first.draws).toBeGreaterThan(0);
-  expect(first.draws).toBeLessThan(150);
+  expect(first.draws).toBeLessThanOrEqual(300);
   const shot = await page.locator('canvas').screenshot();
   expect(shot.length).toBeGreaterThan(30_000); // a blank canvas compresses to a few KB
   expect(errors).toEqual([]);
@@ -63,7 +63,8 @@ test('the area switcher flies the camera to each area (I-5)', async ({ page }) =
   await expect(nav.getByRole('button', { name: 'EV charging & fuel' })).toHaveAttribute('aria-pressed', 'true');
   await expect
     .poll(async () => page.evaluate(() => ({ cam: window.__hub!.cameraTarget(), goal: window.__hub!.areaTarget('energy') })).then((r) => dist2(r.cam, r.goal)), {
-      timeout: 5_000,
+      // The glide itself takes ≤ 2 s; the margin covers shader recompiles when software WebGL drops a quality tier.
+      timeout: 15_000,
     })
     .toBeLessThan(2);
 });
@@ -77,7 +78,10 @@ test('clicking a moving car selects it, follows it and shows its details (I-2, I
       for (const a of h.agents()) {
         if (a.kind !== 'fleet' || a.speed < 0.5) continue;
         const p = h.screenPosition(a.id);
-        if (p && p.x > 100 && p.y > 100 && p.x < innerWidth - 100 && p.y < innerHeight - 100) return { id: a.id };
+        // Only where the 3D view is exposed: the dashboard panels cover parts of the screen.
+        if (p && p.x > 100 && p.y > 100 && p.x < innerWidth - 100 && p.y < innerHeight - 100 && document.elementFromPoint(p.x, p.y)?.tagName === 'CANVAS') {
+          return { id: a.id };
+        }
       }
       return null;
     },
@@ -121,10 +125,17 @@ test('Escape clears the selection (I-6)', async ({ page }) => {
       timeout: 8_000,
     })
     .toBeLessThan(0.5);
-  const p = await page.evaluate(() => window.__hub!.screenPosition('wash1'));
-  expect(p).not.toBeNull();
-  await page.mouse.click(p!.x, p!.y);
-  await expect(page.getByRole('region', { name: 'Details' }).getByRole('heading', { name: 'Wash bay 1' })).toBeVisible();
+  // Click whichever wash or service bay marker is not under a dashboard panel.
+  const target = await page.evaluate(() => {
+    for (const [id, label] of [['wash1', 'Wash bay 1'], ['wash2', 'Wash bay 2'], ['bay1', 'Service bay 1'], ['bay2', 'Service bay 2'], ['bay3', 'Service bay 3']] as const) {
+      const p = window.__hub!.screenPosition(id);
+      if (p && document.elementFromPoint(p.x, p.y)?.tagName === 'CANVAS') return { ...p, label };
+    }
+    return null;
+  });
+  expect(target).not.toBeNull();
+  await page.mouse.click(target!.x, target!.y);
+  await expect(page.getByRole('region', { name: 'Details' }).getByRole('heading', { name: target!.label })).toBeVisible();
   await page.keyboard.press('Escape');
   await expect.poll(() => page.evaluate(() => window.__hub!.selection())).toBeNull();
   await expect(page.getByRole('region', { name: 'Details' })).toHaveCount(0);

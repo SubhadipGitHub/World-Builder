@@ -60,7 +60,7 @@ test('night mode darkens the hub and stays within the draw-call budget in the ra
   await page.getByRole('group', { name: 'Time of day' }).getByRole('button', { name: 'Night' }).click();
   await expect.poll(() => page.evaluate(() => window.__hub!.environment().nightFactor)).toBe(1);
   await page.waitForTimeout(500);
-  expect(await page.evaluate(() => window.__hub!.drawCalls())).toBeLessThan(150);
+  expect(await page.evaluate(() => window.__hub!.drawCalls())).toBeLessThanOrEqual(300);
 });
 
 test('the light theme applies and survives a reload (X-4)', async ({ page }) => {

@@ -48,6 +48,11 @@ export interface AreaLayout {
   readonly z: number;
   /** Camera distance that frames the area. */
   readonly distance: number;
+  /**
+   * Camera azimuth (radians, 0 = looking north from the south). Areas are laid out east–west,
+   * so a south view runs them across the uncovered middle of the screen. Omitted = keep current.
+   */
+  readonly azimuth?: number;
 }
 
 export interface HubLayout {
@@ -412,10 +417,10 @@ export const hub: HubLayout = {
   ],
   areas: [
     { id: 'overview', label: 'Overview', x: 0, z: 35, distance: 560 },
-    { id: 'return', label: 'Return & inspection', x: -90, z: -72, distance: 110 },
-    { id: 'wash', label: 'Wash & maintenance', x: 70, z: -74, distance: 140 },
-    { id: 'energy', label: 'EV charging & fuel', x: 145, z: 40, distance: 120 },
-    { id: 'lot', label: 'Ready lot & exit gate', x: 10, z: 150, distance: 170 },
+    { id: 'return', label: 'Return & inspection', x: -100, z: -72, distance: 130, azimuth: 0 },
+    { id: 'wash', label: 'Wash & maintenance', x: 68, z: -74, distance: 170, azimuth: 0 },
+    { id: 'energy', label: 'EV charging & fuel', x: 145, z: 38, distance: 150, azimuth: 0 },
+    { id: 'lot', label: 'Ready lot & exit gate', x: -5, z: 150, distance: 250, azimuth: 0 },
   ],
 };
 

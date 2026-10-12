@@ -6,6 +6,8 @@ export interface SceneHandle {
   readonly scene: Scene;
   readonly camera: PerspectiveCamera;
   readonly canvas: HTMLCanvasElement;
+  readonly hemi: HemisphereLight;
+  readonly sun: DirectionalLight;
   /** Matches the drawing buffer and camera to the container size. */
   resize(): void;
 }
@@ -30,7 +32,8 @@ export function createScene(container: HTMLElement, palette: Palette): SceneHand
   // Narrow field of view reads as isometric while keeping depth cues (A5).
   const camera = new PerspectiveCamera(30, 1, 1, 4000);
 
-  scene.add(new HemisphereLight(palette.skyLight, palette.groundLight, 1.6));
+  const hemi = new HemisphereLight(palette.skyLight, palette.groundLight, 1.6);
+  scene.add(hemi);
   const sun = new DirectionalLight('#FFF4E2', 2.4);
   sun.position.set(-160, 320, 140);
   sun.target.position.set(10, 0, 40);
@@ -55,5 +58,5 @@ export function createScene(container: HTMLElement, palette: Palette): SceneHand
     camera.updateProjectionMatrix();
   };
   resize();
-  return { renderer, scene, camera, canvas, resize };
+  return { renderer, scene, camera, canvas, hemi, sun, resize };
 }

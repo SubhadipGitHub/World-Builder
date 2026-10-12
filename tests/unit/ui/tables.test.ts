@@ -10,11 +10,13 @@ describe('fleetRows (D-6 Active fleet)', () => {
         agent({ id: 'GL-PGW-00002', cls: 'sedan', socPct: null, fuelPct: 37, state: 'toLot' }),
         agent({ id: 'shuttle-1', kind: 'shuttle', cls: null }),
         agent({ id: 'GL-PGW-00001' }),
+        agent({ id: 'GL-PGW-00003', x: -200, z: -70 }),
       ]),
     );
     expect(rows).toEqual([
       { id: 'GL-PGW-00001', model: 'Compact EV crossover', status: 'Washing', energy: 'Battery 64%', location: 'EV charging & fuel' },
       { id: 'GL-PGW-00002', model: 'Mid-size sedan', status: 'Heading to Ready lot', energy: 'Fuel 37%', location: 'EV charging & fuel' },
+      { id: 'GL-PGW-00003', model: 'Compact EV crossover', status: 'Washing', energy: 'Battery 64%', location: 'On hub roads' },
     ]);
   });
 });

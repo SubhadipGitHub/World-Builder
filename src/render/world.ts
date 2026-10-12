@@ -1,28 +1,52 @@
 import {
   BoxGeometry,
-  BufferGeometry,
-  CylinderGeometry,
-  Float32BufferAttribute,
+  Color,
   Group,
-  IcosahedronGeometry,
   InstancedMesh,
   Matrix4,
   Mesh,
   MeshBasicMaterial,
   MeshStandardMaterial,
-  PlaneGeometry,
   Quaternion,
   Vector3,
+  type BufferGeometry,
   type Raycaster,
 } from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { hub, hubGraph, type BuildingLayout } from '../layout/hub';
-import { unitMarker } from '../layout/positions';
-import type { Vec2 } from '../sim/types';
+import { hub } from '../layout/hub';
+import { unitMarker, unitPose, type Pose } from '../layout/positions';
+import { buildingAsset } from './assets/buildings';
+import type { DetailStates } from './details';
+import { assemble, paint, place } from './kit/assemble';
+import { cylinder, roundedBox } from './kit/shapes';
+import { buildLandscape } from './landscape';
+import { createLampsView } from './lampsView';
 import type { Palette } from './palette';
+
+export interface WorldConditions {
+  /** 0 dry … 1 soaked: darker, glossier asphalt. */
+  readonly wetness: number;
+  /** 0 day … 1 night: windows, signage and lamps glow. */
+  readonly night: number;
+}
+
+export interface WorldFrame {
+  readonly dt: number;
+  /** Wall-clock seconds since start (lamp stagger, brushes, beacons). */
+  readonly wallTime: number;
+  readonly reducedMotion: boolean;
+  readonly poolFraction: number;
+  readonly details: DetailStates;
+}
 
 export interface WorldHandle {
   readonly group: Group;
+  setConditions(conditions: WorldConditions): void;
+  setPalette(palette: Palette): void;
+  /** Per-frame animation: lamps, wash brushes, garage doors, gate barriers, charger lights (V-6, V-9). */
+  update(frame: WorldFrame): void;
+  /** Mean lamp brightness, 0 off … 1 all lit. */
+  lampsLit(): number;
   /** Unit id under the ray (equipment markers), or null. */
   pickUnit(raycaster: Raycaster): string | null;
   /** Every clickable unit id, in marker order. */
@@ -30,212 +54,202 @@ export interface WorldHandle {
 }
 
 const UP = new Vector3(0, 1, 0);
-const tmpMatrix = new Matrix4();
-const tmpQuat = new Quaternion();
+const X_AXIS = new Vector3(1, 0, 0);
+const ONE = new Vector3(1, 1, 1);
+const tmp = new Matrix4();
+const q = new Quaternion();
 
-const standard = (color: string, roughness = 0.9): MeshStandardMaterial => new MeshStandardMaterial({ color, roughness, metalness: 0 });
-
-/** A box placed in the world: centre (x, y, z), size, yaw (radians, three's rotation.y). */
-function box(w: number, h: number, d: number, x: number, y: number, z: number, yaw = 0): BufferGeometry {
-  const g = new BoxGeometry(w, h, d);
-  g.applyMatrix4(tmpMatrix.compose(new Vector3(x, y, z), tmpQuat.setFromAxisAngle(UP, yaw), new Vector3(1, 1, 1)));
-  return g;
-}
-
-/** Flat strip following a polyline at height y. */
-function ribbon(points: readonly Vec2[], width: number, y: number): BufferGeometry {
-  const positions: number[] = [];
-  const indices: number[] = [];
-  const half = width / 2;
-  points.forEach((p, i) => {
-    const prev = points[Math.max(0, i - 1)] as Vec2;
-    const next = points[Math.min(points.length - 1, i + 1)] as Vec2;
-    const dx = next.x - prev.x;
-    const dz = next.z - prev.z;
-    const len = Math.hypot(dx, dz) || 1;
-    const nx = -dz / len;
-    const nz = dx / len;
-    positions.push(p.x + nx * half, y, p.z + nz * half, p.x - nx * half, y, p.z - nz * half);
-    if (i > 0) {
-      const a = (i - 1) * 2;
-      indices.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
-    }
+/** Instances placed beside each pose: `lateral` metres to the side, `ahead` metres forward. */
+const instanced = (geometry: BufferGeometry, material: MeshStandardMaterial | MeshBasicMaterial, poses: readonly Pose[], lateral = 0, ahead = 0): InstancedMesh => {
+  const mesh = new InstancedMesh(geometry, material, Math.max(1, poses.length));
+  poses.forEach((p, i) => {
+    const x = p.x + Math.cos(p.heading) * ahead - Math.sin(p.heading) * lateral;
+    const z = p.z + Math.sin(p.heading) * ahead + Math.cos(p.heading) * lateral;
+    mesh.setMatrixAt(i, tmp.compose(new Vector3(x, 0, z), q.setFromAxisAngle(UP, -p.heading), ONE));
   });
-  const g = new BufferGeometry();
-  g.setAttribute('position', new Float32BufferAttribute(positions, 3));
-  g.setAttribute('normal', new Float32BufferAttribute(positions.map((_, i) => (i % 3 === 1 ? 1 : 0)), 3));
-  g.setIndex(indices);
-  return g;
-}
-
-const merged = (parts: BufferGeometry[]): BufferGeometry => {
-  const g = mergeGeometries(parts.map((p) => (p.index ? p.toNonIndexed() : p)));
-  for (const p of parts) p.dispose();
-  return g;
+  mesh.count = poses.length;
+  mesh.castShadow = true;
+  return mesh;
 };
 
-function roads(): { asphalt: BufferGeometry; walkway: BufferGeometry } {
-  const asphalt: BufferGeometry[] = [];
-  const walkway: BufferGeometry[] = [];
-  for (const e of hubGraph().edges) {
-    if (e.kinds?.includes('pedestrian')) walkway.push(ribbon(e.path.points, 2.4, 0.04));
-    else asphalt.push(ribbon(e.path.points, Math.max(e.width, 3) + 0.8, 0.02));
-  }
-  return { asphalt: merged(asphalt), walkway: merged(walkway) };
-}
+// ---------- equipment beside the bays (the click targets stay invisible at unitMarker) ----------
 
-/** Stall separators in the Ready lot and zebra stripes where walkways cross roads. */
-function markings(): BufferGeometry {
-  const graph = hubGraph();
+const chargerPillar = (): BufferGeometry =>
+  assemble([
+    place(paint(roundedBox(0.55, 1.7, 0.65, 0.18, 2), '#F4F2EC'), { y: 0.85 }),
+    place(paint(roundedBox(0.6, 0.16, 0.7, 0.06, 1), '#F2B33D'), { y: 1.75 }),
+    place(paint(roundedBox(0.05, 0.42, 0.42, 0.03, 1), '#1F2A3A'), { x: 0.28, y: 1.2 }),
+    place(paint(cylinder(0.04, 0.04, 1.1, 6), '#2A2C33'), { x: 0.3, y: 0.6, z: 0.24, rotZ: 0.5 }),
+  ]);
+const statusLight = (): BufferGeometry => place(roundedBox(0.06, 0.12, 0.3, 0.03, 1), { x: 0.29, y: 1.55 });
+
+const pumpIsland = (): BufferGeometry =>
+  assemble([
+    place(paint(roundedBox(1.1, 0.25, 1.6, 0.1, 1), '#C9CCD4'), { y: 0.12 }),
+    place(paint(roundedBox(0.6, 1.8, 0.9, 0.16, 2), '#F4F2EC'), { y: 1.1 }),
+    place(paint(roundedBox(0.65, 0.3, 0.95, 0.08, 1), '#E0262B'), { y: 1.9 }),
+    place(paint(roundedBox(0.05, 0.35, 0.5, 0.03, 1), '#9FE3FF'), { x: 0.31, y: 1.35 }),
+  ]);
+
+const bollard = (): BufferGeometry =>
+  assemble([place(paint(cylinder(0.14, 0.16, 0.8, 8), '#E9E6DF'), { y: 0.4 }), place(paint(cylinder(0.16, 0.16, 0.14, 8), '#F2B33D'), { y: 0.82 })]);
+
+const brush = (): BufferGeometry =>
+  assemble([
+    place(paint(cylinder(0.38, 0.38, 2.3, 12), '#3E7BD6'), { y: 1.3 }),
+    place(paint(cylinder(0.4, 0.4, 0.25, 12), '#F2B33D'), { y: 0.7 }),
+    place(paint(cylinder(0.4, 0.4, 0.25, 12), '#F2B33D'), { y: 1.9 }),
+    place(paint(cylinder(0.08, 0.08, 0.4, 6), '#8D939E'), { y: 2.6 }),
+  ]);
+
+/** Roll-up door: slats from the floor up to 3.8 m, spanning one bay. */
+const rollerDoor = (): BufferGeometry => {
   const parts: BufferGeometry[] = [];
-  for (const u of hub.stations.slot.units) {
-    const e = graph.edge(u.parkEdge);
-    const a = e.path.pointAt(0);
-    const h = e.path.headingAt(0);
-    const len = 13;
-    for (const side of [-1.6, 1.6]) {
-      const cx = a.x + Math.cos(h) * (len / 2) - Math.sin(h) * side;
-      const cz = a.z + Math.sin(h) * (len / 2) + Math.cos(h) * side;
-      parts.push(box(len, 0.02, 0.12, cx, 0.06, cz, -h));
-    }
-  }
-  for (const e of graph.edges) {
-    if (!e.kinds?.includes('pedestrian')) continue;
-    for (const { interval } of graph.zonesOn(e.id)) {
-      for (let s = interval.sEnter + 0.4; s < interval.sExit - 0.2; s += 0.9) {
-        const p = e.path.pointAt(s);
-        const h = e.path.headingAt(s);
-        parts.push(box(0.45, 0.02, 2.6, p.x, 0.07, p.z, -h));
-      }
-    }
-  }
-  return merged(parts);
-}
+  for (let i = 0; i < 8; i++) parts.push(place(paint(roundedBox(0.12, 0.46, 5.4, 0.04, 1), i % 2 ? '#D9DCE2' : '#C9CDD4'), { y: 0.25 + i * 0.47 }));
+  return assemble(parts);
+};
 
-const CANOPIES = new Set(['canopy', 'wash', 'service', 'evHub', 'fuel', 'depot']);
+/** Red-and-white barrier arm reaching along −z from its pivot. */
+const barrierArm = (): BufferGeometry => {
+  const parts: BufferGeometry[] = [];
+  for (let i = 0; i < 6; i++) parts.push(place(paint(roundedBox(0.12, 0.12, 0.55, 0.04, 1), i % 2 ? '#E0262B' : '#F7F3EA'), { z: -0.3 - i * 0.55 }));
+  return assemble(parts);
+};
 
-interface BuildingParts {
-  clay: BufferGeometry[];
-  roof: BufferGeometry[];
-  accent: BufferGeometry[];
-  glass: BufferGeometry[];
-}
-
-function building(b: BuildingLayout, out: BuildingParts): void {
-  if (b.id === 'lot') return;
-  if (b.id === 'gates') {
-    // Booth between the two exit lanes, plus barrier arms.
-    out.clay.push(box(2.4, 2.6, 1.4, b.x + 5, 1.3, b.z));
-    out.accent.push(box(2.6, 0.25, 1.6, b.x + 5, 2.7, b.z));
-    for (const dz of [-3, 3]) out.accent.push(box(0.15, 0.15, 3.2, b.x - 1.6, 1.1, b.z + dz));
-    return;
-  }
-  if (CANOPIES.has(b.id)) {
-    // Open canopy so the cars underneath stay visible.
-    const hx = b.width / 2 - 0.5;
-    const hz = b.depth / 2 - 0.5;
-    for (const [px, pz] of [[-hx, -hz], [hx, -hz], [-hx, hz], [hx, hz], [0, -hz], [0, hz]] as const) {
-      out.clay.push(box(0.5, b.height, 0.5, b.x + px, b.height / 2, b.z + pz));
-    }
-    // Roof as an open frame (edge beams plus cross beams) so the bays stay visible from above.
-    const y = b.height + 0.25;
-    out.roof.push(box(0.4, 0.5, b.depth, b.x - b.width / 2, y, b.z), box(0.4, 0.5, b.depth, b.x + b.width / 2, y, b.z));
-    for (let i = 1; i < 4; i++) out.roof.push(box(0.25, 0.3, b.depth, b.x - b.width / 2 + (b.width * i) / 4, y, b.z));
-    out.accent.push(box(b.width + 0.4, 0.45, 0.35, b.x, y, b.z + b.depth / 2));
-    out.accent.push(box(b.width + 0.4, 0.45, 0.35, b.x, y, b.z - b.depth / 2));
-    return;
-  }
-  // Solid building (terminal): clay body, roof slab, glass front and a gold band facing the lot.
-  out.clay.push(box(b.width, b.height, b.depth, b.x, b.height / 2, b.z));
-  out.roof.push(box(b.width + 1, 0.6, b.depth + 1, b.x, b.height + 0.3, b.z));
-  out.glass.push(box(0.3, b.height * 0.55, b.depth * 0.8, b.x + b.width / 2 + 0.1, b.height * 0.35, b.z));
-  out.accent.push(box(0.4, 1.2, b.depth * 0.9, b.x + b.width / 2 + 0.2, b.height - 1.4, b.z));
-}
-
-/** Small instanced props: palms around the terminal and light poles along the lot. */
-function props(palette: Palette): Group {
-  const g = new Group();
-  const palms: Vec2[] = [];
-  for (let i = 0; i < 7; i++) palms.push({ x: -95 + i * 9, z: 92 }, { x: -95 + i * 9, z: 156 });
-  const trunk = new InstancedMesh(new CylinderGeometry(0.25, 0.35, 7, 6).translate(0, 3.5, 0), standard(palette.trunk), palms.length);
-  const crown = new InstancedMesh(new IcosahedronGeometry(2.2, 0).translate(0, 7.6, 0), standard(palette.foliage), palms.length);
-  palms.forEach((p, i) => {
-    tmpMatrix.makeTranslation(p.x, 0, p.z);
-    trunk.setMatrixAt(i, tmpMatrix);
-    crown.setMatrixAt(i, tmpMatrix);
-  });
-  trunk.castShadow = crown.castShadow = true;
-
-  const poles: Vec2[] = [];
-  for (const x of [-4, 20.5, 42.5, 68]) for (const z of [100, 120, 140, 160]) poles.push({ x, z });
-  const pole = new InstancedMesh(new CylinderGeometry(0.12, 0.15, 9, 6).translate(0, 4.5, 0), standard('#9AA0AA'), poles.length);
-  const lamp = new InstancedMesh(new BoxGeometry(1.4, 0.25, 0.5).translate(0, 9, 0), standard(palette.accent, 0.5), poles.length);
-  poles.forEach((p, i) => {
-    tmpMatrix.makeTranslation(p.x, 0, p.z);
-    pole.setMatrixAt(i, tmpMatrix);
-    lamp.setMatrixAt(i, tmpMatrix);
-  });
-  g.add(trunk, crown, pole, lamp);
-  return g;
-}
-
-/** Static scene: ground, roads, lot, markings, buildings, equipment markers and props (W-1..W-4). */
+/** Static scene (V-1..V-6): landscape, Pixar-style buildings, equipment, lamps and live details. */
 export function buildWorld(palette: Palette): WorldHandle {
   const group = new Group();
+  const landscape = buildLandscape(palette);
+  const lampsView = createLampsView();
 
-  const ground = new Mesh(new PlaneGeometry(1200, 900).rotateX(-Math.PI / 2), standard(palette.ground, 1));
-  ground.position.set(-10, 0, 30);
-  ground.receiveShadow = true;
-  ground.name = 'ground';
+  // Buildings: every solid, glass and glow part merged into one mesh each (P1).
+  const solids: BufferGeometry[] = [];
+  const glasses: BufferGeometry[] = [];
+  const glows: BufferGeometry[] = [];
+  for (const b of hub.buildings) {
+    const a = buildingAsset(b, palette);
+    solids.push(a.solid);
+    glasses.push(a.glass);
+    glows.push(a.glow);
+  }
+  const solidMat = new MeshStandardMaterial({ vertexColors: true, roughness: 0.7, metalness: 0.02 });
+  const glassMat = new MeshStandardMaterial({ vertexColors: true, roughness: 0.12, metalness: 0.35, transparent: true, opacity: 0.55, emissive: '#FFCF8A', emissiveIntensity: 0 });
+  const glowMat = new MeshBasicMaterial({ vertexColors: true, toneMapped: false });
+  const solid = new Mesh(mergeGeometries(solids), solidMat);
+  const glass = new Mesh(mergeGeometries(glasses), glassMat);
+  const glow = new Mesh(mergeGeometries(glows), glowMat);
+  solid.castShadow = solid.receiveShadow = true;
+  glass.renderOrder = 2;
 
-  const { asphalt, walkway } = roads();
-  const roadMesh = new Mesh(asphalt, standard(palette.asphalt, 0.95));
-  const walkMesh = new Mesh(walkway, standard(palette.walkway, 0.95));
-  roadMesh.receiveShadow = walkMesh.receiveShadow = true;
+  // Equipment beside each bay.
+  const equipMat = new MeshStandardMaterial({ vertexColors: true, roughness: 0.5 });
+  const chargerIds = hub.stations.charger.units.map((u) => u.id);
+  const chargerPoses = chargerIds.map((id) => unitPose(id));
+  const chargers = instanced(chargerPillar(), equipMat, chargerPoses, 2, 1.6);
+  const statusMat = new MeshBasicMaterial({ toneMapped: false });
+  const status = instanced(statusLight(), statusMat, chargerPoses, 2, 1.6);
+  status.castShadow = false;
+  const pumps = instanced(pumpIsland(), equipMat, hub.stations.pump.units.map((u) => unitPose(u.id)), 3, 0.8);
+  const bollards = instanced(bollard(), equipMat, hub.stations.slot.units.map((u) => unitPose(u.id)), 1.6, 2.4);
 
-  const lotLayout = hub.buildings.find((b) => b.id === 'lot');
-  const lot = lotLayout
-    ? new Mesh(new BoxGeometry(lotLayout.width, 0.04, lotLayout.depth).translate(lotLayout.x, 0.03, lotLayout.z), standard(palette.asphalt, 0.95))
-    : new Group();
-  if (lot instanceof Mesh) lot.receiveShadow = true;
-
-  const markingMesh = new Mesh(markings(), new MeshBasicMaterial({ color: palette.marking }));
-
-  const parts: BuildingParts = { clay: [], roof: [], accent: [], glass: [] };
-  for (const b of hub.buildings) building(b, parts);
-  const buildingMeshes = [
-    new Mesh(merged(parts.clay), standard(palette.clay)),
-    new Mesh(merged(parts.roof), standard(palette.roof)),
-    new Mesh(merged(parts.accent), standard(palette.accent, 0.5)),
-    new Mesh(merged(parts.glass), standard(palette.glass, 0.3)),
-  ];
-  for (const m of buildingMeshes) m.castShadow = m.receiveShadow = true;
-
-  // Equipment markers: one post per clickable unit, with a gold cap, plus an invisible, larger hit box.
+  // Invisible, generous hit boxes at the click targets (unchanged from M1).
   const unitIds = Object.values(hub.stations).flatMap((s) => s.units.map((u) => u.id));
-  const post = new InstancedMesh(new BoxGeometry(0.6, 1.6, 0.6).translate(0, 0.8, 0), standard('#5B5F6B', 0.7), unitIds.length);
-  const cap = new InstancedMesh(new BoxGeometry(0.7, 0.25, 0.7).translate(0, 1.72, 0), standard(palette.accent, 0.5), unitIds.length);
   const hitMaterial = new MeshBasicMaterial();
   hitMaterial.visible = false;
   const hit = new InstancedMesh(new BoxGeometry(2.4, 2.6, 2.4).translate(0, 1.3, 0), hitMaterial, unitIds.length);
   unitIds.forEach((id, i) => {
     const m = unitMarker(id);
-    tmpMatrix.compose(new Vector3(m.x, 0, m.z), tmpQuat.setFromAxisAngle(UP, -m.heading), new Vector3(1, 1, 1));
-    post.setMatrixAt(i, tmpMatrix);
-    cap.setMatrixAt(i, tmpMatrix);
-    hit.setMatrixAt(i, tmpMatrix);
+    hit.setMatrixAt(i, tmp.compose(new Vector3(m.x, 0, m.z), q.setFromAxisAngle(UP, -m.heading), ONE));
   });
-  post.castShadow = true;
   hit.computeBoundingSphere();
 
-  group.add(ground, roadMesh, walkMesh, lot, markingMesh, ...buildingMeshes, post, cap, hit, props(palette));
+  // Live details (V-9): two brushes per wash bay, a roll-up door per service bay, an arm per gate.
+  const washIds = hub.stations.wash.units.map((u) => u.id);
+  const brushPoses = washIds.flatMap((id) => [-1.45, 1.45].map((side) => ({ ...unitPose(id), side })));
+  const brushes = new InstancedMesh(brush(), equipMat, brushPoses.length);
+  brushes.castShadow = true;
+  const serviceIds = hub.stations.service.units.map((u) => u.id);
+  const doors = new InstancedMesh(rollerDoor(), equipMat, serviceIds.length);
+  doors.castShadow = true;
+  const gateIds = hub.stations.gate.units.map((u) => u.id);
+  const gateZ = hub.stations.gate.units.map((u) => unitPose(u.id).z);
+  const arms = new InstancedMesh(barrierArm(), equipMat, gateIds.length);
+  arms.castShadow = true;
+
+  const spin = new Float32Array(brushPoses.length);
+  const doorOpen = new Float32Array(serviceIds.length);
+  const armUp = new Float32Array(gateIds.length);
+  const colour = new Color();
+  const scale = new Vector3();
+  const pos = new Vector3();
+
+  const placeDetails = (): void => {
+    brushPoses.forEach((p, i) => {
+      pos.set(p.x - Math.sin(p.heading) * p.side, 0, p.z + Math.cos(p.heading) * p.side);
+      brushes.setMatrixAt(i, tmp.compose(pos, q.setFromAxisAngle(UP, spin[i] ?? 0), ONE));
+    });
+    brushes.instanceMatrix.needsUpdate = true;
+    serviceIds.forEach((id, i) => {
+      const open = doorOpen[i] ?? 0;
+      // Slats roll up into the header: the door shortens and rises.
+      doors.setMatrixAt(i, tmp.compose(pos.set(106, 3.6 * open, unitPose(id).z), q.identity(), scale.set(1, 1 - 0.9 * open, 1)));
+    });
+    doors.instanceMatrix.needsUpdate = true;
+    gateZ.forEach((z, i) => {
+      // Pivot on a post between the lanes; the arm reaches across its own lane and lifts to vertical.
+      const towardLane = z < 190 ? 0 : Math.PI;
+      const lift = (armUp[i] ?? 0) * (Math.PI / 2);
+      q.setFromAxisAngle(UP, towardLane).multiply(new Quaternion().setFromAxisAngle(X_AXIS, -lift));
+      arms.setMatrixAt(i, tmp.compose(pos.set(-66.4, 1.05, z < 190 ? 189.5 : 190.5), q, ONE));
+    });
+    arms.instanceMatrix.needsUpdate = true;
+  };
+  placeDetails();
+
+  group.add(landscape.group, solid, glass, glow, chargers, status, pumps, bollards, hit, brushes, doors, arms, lampsView.group);
+
+  let night = 0;
+  let lampsLit = 0;
 
   return {
     group,
     unitIds,
+    setConditions(c) {
+      night = c.night;
+      landscape.setConditions(c.wetness);
+      glassMat.emissiveIntensity = 0.12 * c.night;
+      // Signage and screens glow past 1.0 at night so bloom picks them up.
+      glowMat.color.setScalar(0.55 + 1.7 * c.night);
+    },
+    setPalette(p) {
+      landscape.setPalette(p);
+    },
+    update(frame) {
+      const ease = 1 - Math.exp(-frame.dt * 4);
+      brushPoses.forEach((_, i) => {
+        if (!frame.reducedMotion && frame.details.spinningWash.has(washIds[Math.floor(i / 2)] as string)) {
+          spin[i] = ((spin[i] ?? 0) + frame.dt * 7 * (i % 2 ? 1 : -1)) % (Math.PI * 2);
+        }
+      });
+      serviceIds.forEach((id, i) => {
+        const target = frame.details.openDoors.has(id) ? 1 : 0;
+        doorOpen[i] = (doorOpen[i] ?? 0) + (target - (doorOpen[i] ?? 0)) * ease;
+      });
+      gateIds.forEach((id, i) => {
+        const target = frame.details.raisedBarriers.has(id) ? 1 : 0;
+        armUp[i] = (armUp[i] ?? 0) + (target - (armUp[i] ?? 0)) * ease;
+      });
+      placeDetails();
+      chargerIds.forEach((id, i) => {
+        const charging = frame.details.chargers.get(id) === 'charging';
+        status.setColorAt(i, colour.set(charging ? '#3BE37A' : '#7FA8FF').multiplyScalar(charging ? 1.6 + 0.6 * night : 0.6));
+      });
+      if (status.instanceColor) status.instanceColor.needsUpdate = true;
+      lampsLit = lampsView.update({ night, wallTime: frame.wallTime, reducedMotion: frame.reducedMotion, poolFraction: frame.poolFraction });
+    },
+    lampsLit: () => lampsLit,
     pickUnit(raycaster) {
-      const hits = raycaster.intersectObject(hit, false);
-      const first = hits[0];
+      const first = raycaster.intersectObject(hit, false)[0];
       return first?.instanceId !== undefined ? (unitIds[first.instanceId] ?? null) : null;
     },
   };
