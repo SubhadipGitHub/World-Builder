@@ -1,3 +1,4 @@
+import { notImplemented } from '../shared/notImplemented';
 import { signal } from '@preact/signals';
 import { h, render } from 'preact';
 import { Raycaster, Vector2, Vector3 } from 'three';
@@ -35,7 +36,7 @@ import { formatClock, unitLabel } from '../ui/format';
 import { COMPACT_DISTANCE, FACILITIES, declutter, facilityStatuses, type FacilityId, type FacilityStatus } from '../ui/facilities';
 import { createKpiTracker, type KpiId } from '../ui/kpis';
 import { PLACES, type PlaceId } from '../ui/places';
-import { LABELS_KEY, loadFlag, saveFlag } from '../ui/prefs';
+import { DEFAULT_VOLUME, LABELS_KEY, loadFlag, saveFlag } from '../ui/prefs';
 import { cameraLimits } from './limits';
 import type { Speed } from '../ui/m4/SpeedControl';
 import {
@@ -201,7 +202,12 @@ function start(root: HTMLElement): void {
 
   let baselineMetrics: Metrics = baseline.metrics();
   let baselineQueues = queueSummary(baseline.snapshot());
-  const kpiValues = (m: Metrics): Readonly<Record<KpiId, number | null>> => ({ turnaround: m.turnaroundMin, utilisation: m.utilisation * 100, evSoc: m.readyEvSocPct });
+  const kpiValues = (m: Metrics): Readonly<Record<KpiId, number | null>> => ({
+    turnaround: m.turnaroundMin,
+    utilisation: m.utilisation * 100,
+    evSoc: m.readyEvSocPct,
+    revenue: m.revenue.today,
+  });
   /** Deltas against the baseline while a scenario is relevant (S-12). */
   const kpiDeltas = (m: Metrics): Partial<Record<KpiId, KpiDelta | null>> => {
     if (!deltaVisible(curr.scenario, curr.simTimeSec)) return {};
@@ -230,12 +236,24 @@ function start(root: HTMLElement): void {
       places: settings.value.labels ? PLACES.map((p) => ({ id: p.id, name: p.name })) : [],
       queues: queueSummary(curr),
       baselineQueues,
+      toasts: [], // Stage 3 placeholder (M9, FE-19)
+      toastOverflow: 0,
     };
   };
   const tableData = (): TableData => ({ fleet: fleetRows(curr), queue: queueRows(curr), checkouts: checkoutLog.rows() });
 
   // Settings first: dashboardData() reads the labels switch.
-  const settings = signal<Settings>({ weather: weatherMode, dayNight, theme, speed: 1, labels: link.labels ?? loadFlag(storage, LABELS_KEY, true) });
+  const settings = signal<Settings>({
+    weather: weatherMode,
+    dayNight,
+    theme,
+    speed: 1,
+    labels: link.labels ?? loadFlag(storage, LABELS_KEY, true),
+    // Stage 3 placeholders (M9, FE-18, FE-20): Stage 4 loads these from prefs.
+    sound: false,
+    volume: DEFAULT_VOLUME,
+    toasts: true,
+  });
   const data = signal<DashboardData>(dashboardData());
 
   // ---------- share: links, kiosk, screenshot, help (M8, §21) ----------
@@ -460,6 +478,8 @@ function start(root: HTMLElement): void {
       onSelectVehicle: (id: string) => {
         store.select({ kind: 'agent', id });
       },
+      // Stage 3 placeholders (M9, FE-18…FE-20).
+      audio: { onSound: notImplemented, onVolume: notImplemented, onToasts: notImplemented, onToast: notImplemented, onDismissToast: notImplemented, onHoldToast: notImplemented },
       onLabels: (on: boolean) => {
         saveFlag(storage, LABELS_KEY, on);
         settings.value = { ...settings.value, labels: on };
@@ -877,6 +897,14 @@ function start(root: HTMLElement): void {
       },
       advanceKiosk: kioskStep,
       help: () => share.value.helpOpen,
+      // Stage 3 placeholders (M9, §22).
+      audioState: notImplemented,
+      toasts: notImplemented,
+      revenue: () => sim.metrics().revenue,
+      wind: () => environment.wind,
+      lightning: notImplemented,
+      particleCount: notImplemented,
+      forceAlert: notImplemented,
     };
     window.__hub = hooks;
   }

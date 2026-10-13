@@ -7,13 +7,14 @@ export const facility = {
   serviceBays: 3,
   evChargers: 8,
   fuelPumps: 4,
-  readySlots: { sedan: 18, suv: 12, ev: 18 },
+  // Stage 3 (M9): new classes have no stalls or share yet; Stage 4 derives both from config/fleet.ts (F1).
+  readySlots: { economy: 0, sedan: 18, luxury: 0, suv: 12, minivan: 0, pickup: 0, ev: 18 },
   exitGates: 2,
   shuttles: 2,
   carts: 3,
   maxPedestrians: 30,
   fleetSize: 120,
-  fleetMix: { ev: 0.35, suv: 0.25, sedan: 0.4 },
+  fleetMix: { economy: 0, sedan: 0.4, luxury: 0, suv: 0.25, minivan: 0, pickup: 0, ev: 0.35 },
 } as const satisfies {
   readySlots: Record<VehicleClass, number>;
   fleetMix: Record<VehicleClass, number>;
@@ -29,6 +30,10 @@ export const dimensions = {
   sedan: { length: 4.8, width: 1.85 },
   suv: { length: 5.3, width: 2.0 },
   ev: { length: 4.75, width: 1.92 },
+  economy: { length: 4.1, width: 1.75 },
+  luxury: { length: 5.1, width: 1.9 },
+  minivan: { length: 5.15, width: 2.0 },
+  pickup: { length: 5.8, width: 2.0 },
   shuttle: { length: 9.0, width: 2.5 },
   cart: { length: 2.4, width: 1.2 },
   tow: { length: 6.5, width: 2.3 },

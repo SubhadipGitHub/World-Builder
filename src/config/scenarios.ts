@@ -33,7 +33,9 @@ export const crewFactor: Readonly<Record<CrewLevel, number>> = { short: 1.5, nor
 export const deltaLingerSimSec = 3600;
 
 /** S-13: deltas smaller than these read "≈ normal" (minutes, percentage points, percentage points). */
-export const noiseBand = { turnaround: 2, utilisation: 1, evSoc: 1 } as const;
+/** Noise bands (S-13); revenue (FE-8) uses the larger of its US$ floor and `revenueNoiseShare` of the baseline. */
+export const noiseBand = { turnaround: 2, utilisation: 1, evSoc: 1, revenue: 500 } as const;
+export const revenueNoiseShare = 0.03;
 
 /** Resource kinds that can be taken offline (S-2); slots and the tow bay cannot. */
 export const OUTAGE_KINDS = ['returnLane', 'wash', 'service', 'charger', 'pump', 'gate'] as const;

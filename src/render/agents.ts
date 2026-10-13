@@ -15,6 +15,7 @@ import {
   Vector3,
   type Raycaster,
 } from 'three';
+import type { VehicleClass } from '../sim/types';
 import type { AgentView } from '../sim/world';
 import { personAsset, walkBob } from './assets/people';
 import { vehicleAsset, type VehicleAssetKind } from './assets/vehicles';
@@ -48,10 +49,26 @@ interface Visual {
   readonly pickMesh: InstancedMesh;
 }
 
-const CAPACITY: Readonly<Record<VisualKey, number>> = { sedan: 80, suv: 60, ev: 70, shuttle: 4, cart: 6, tow: 2, van: 2, pedestrian: 60 };
+const CAPACITY: Readonly<Record<VisualKey, number>> = {
+  sedan: 80,
+  suv: 60,
+  ev: 70,
+  // M9 classes: meshes are built in Stage 4 (FE-10).
+  economy: 60,
+  luxury: 20,
+  minivan: 20,
+  pickup: 20,
+  shuttle: 4,
+  cart: 6,
+  tow: 2,
+  van: 2,
+  pedestrian: 60,
+};
 const FLEET_KEYS: ReadonlySet<VisualKey> = new Set(['sedan', 'suv', 'ev']);
 
-const keyOf = (a: AgentView): VisualKey => (a.kind === 'fleet' ? (a.cls ?? 'sedan') : a.kind === 'pedestrian' ? 'pedestrian' : a.kind);
+const FLEET_VISUAL: Readonly<Partial<Record<VehicleClass, VisualKey>>> = { sedan: 'sedan', suv: 'suv', ev: 'ev' };
+const keyOf = (a: AgentView): VisualKey =>
+  a.kind === 'fleet' ? (a.cls ? (FLEET_VISUAL[a.cls] ?? 'sedan') : 'sedan') : a.kind === 'pedestrian' ? 'pedestrian' : a.kind;
 
 /** Stable small hash so a car keeps its paint colour and a walker its stride phase. */
 const hash = (id: string): number => {

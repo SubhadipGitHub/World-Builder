@@ -208,9 +208,11 @@ describe('Dashboard modes (J5)', () => {
       facilities: [],
       compactLabels: false,
       places: [],
+      toasts: [],
+      toastOverflow: 0,
     };
     const tables: TableData = { fleet: [], queue: [], checkouts: [] };
-    const settings: Settings = { weather: 'clear', dayNight: 'auto', theme: 'dark', speed: 1, labels: true };
+    const settings: Settings = { weather: 'clear', dayNight: 'auto', theme: 'dark', speed: 1, labels: true, sound: false, volume: 60, toasts: true };
     const props: DashboardProps = {
       store: createUiStore(),
       data: signal(data),
@@ -243,6 +245,7 @@ describe('Dashboard modes (J5)', () => {
       onPlace: vi.fn(),
       share: signal(state),
       shareActions: actions(),
+      audio: { onSound: vi.fn(), onVolume: vi.fn(), onToasts: vi.fn(), onToast: vi.fn(), onDismissToast: vi.fn(), onHoldToast: vi.fn() },
     };
     render(<Dashboard {...props} />);
     return props;

@@ -33,6 +33,9 @@ export interface CheckoutRow {
   readonly tier: Tier;
   /** e.g. "Exit gate 1". */
   readonly gate: string;
+  /** M9 (FE-9): model label, e.g. "Crew-cab pickup", and the booked daily rate, e.g. "$84/day". */
+  readonly model: string;
+  readonly rate: string;
   readonly simTimeSec: number;
 }
 
@@ -94,7 +97,8 @@ export function createCheckoutLog(max = 50): CheckoutLog {
     ingest(events) {
       for (const e of events) {
         if (e.type !== 'checkout') continue;
-        rows.unshift({ agreementNo: e.agreementNo, vehicleId: e.vehicleId, tier: e.tier, gate: unitLabel(e.gateId), simTimeSec: e.simTimeSec });
+        // Stage 3 placeholders for model and rate (M9, FE-9).
+        rows.unshift({ agreementNo: e.agreementNo, vehicleId: e.vehicleId, tier: e.tier, gate: unitLabel(e.gateId), model: '', rate: '', simTimeSec: e.simTimeSec });
       }
       if (rows.length > max) rows = rows.slice(0, max);
     },

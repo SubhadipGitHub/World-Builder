@@ -19,6 +19,12 @@ describe('shortcuts (SH-12, J9)', () => {
     expect(byKey.get('Escape')).toMatch(/tour|close|clear/i);
   });
 
+  it('lists M for sound (FE-18)', () => {
+    const m = SHORTCUTS.find((s) => s.key === 'm');
+    expect(m?.keys).toBe('M');
+    expect(m?.action).toMatch(/sound/i);
+  });
+
   it('every handled key is listed once', () => {
     const handled = SHORTCUTS.flatMap((s) => (s.key ? [s.key] : []));
     expect(new Set(handled).size).toBe(handled.length);
@@ -31,9 +37,10 @@ describe('shortcuts (SH-12, J9)', () => {
 });
 
 describe('version (SH-3, J12)', () => {
-  it('is package.json version 0.8.0, with an ISO build date', () => {
+  // M9: 0.9.0 (was 0.8.0).
+  it('is package.json version 0.9.0, with an ISO build date', () => {
     const pkg = JSON.parse(readFileSync(resolve('package.json'), 'utf8')) as { version: string };
-    expect(pkg.version).toBe('0.8.0');
+    expect(pkg.version).toBe('0.9.0');
     expect(APP_VERSION).toBe(pkg.version);
     expect(BUILD_DATE).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });

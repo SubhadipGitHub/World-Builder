@@ -32,6 +32,7 @@
 | D22–D25 | M6 airport (2026-10-12) | Mid-size airport, a movement about every 40 s, name labels, three fictional airlines (§11.1). |
 | D26–D39 | M7 ops realism (2026-10-13) | Faster gate cycle, an airport day demand curve, flights following the curve, Balanced targets, then the Stage 4 calibration decisions (§12.1). |
 | D40–D47 | M8 ship & share (2026-10-13) | GitHub Pages, Releases and an embed mode; full deep links; kiosk tour; screenshots; README, help overlay and changelog (§13.1). |
+| D48–D55 | M9 fleet economics, sound, weather FX & notifications (2026-10-13) | 7 rental classes with rates and service intervals, a revenue KPI, fog/storm/wind/particles, a procedural soundscape (muted by default) and alert toasts (§14.1). |
 
 > Note on D2: the pack loads Three.js "from a CDN". We bundle it inline instead. The result is still one HTML file and it works offline.
 
@@ -752,4 +753,177 @@ Goal: anyone can open the world from a link, a downloaded file or an embed, land
 - **Q2 E2E in CI:** **yes**, Chromium only (about 6 min per push). The soak stays local.
 - **Q3 Kiosk areas:** **all six areas**, 20 s each (a 2-minute loop).
 - **Q4 Help on first visit:** **not shown automatically; quick help on hover** over the "?" button, full help on click or `?` (SH-12a).
+
+## 14. M9: Fleet economics, sound, weather FX and notifications (APPROVED 2026-10-13)
+
+Goal: the hub earns money, sounds alive and tells you when something needs attention. Seven rental classes, each with its own daily rate and service interval, feed a live revenue KPI. Fog, thunderstorms, wind and ambient particles make the weather richer. A procedural soundscape and pop-up alerts complete it. Everything is still procedural, fictional and in one offline file (W-1, N-1, N-7): there are no audio files, and the CSP is unchanged.
+
+### 14.1 Decisions
+| # | Decision | Choice |
+|---|---|---|
+| D48 | New classes (2026-10-13) | **Economy compact, Luxury, Minivan (7-seat) and Pickup** join Sedan, SUV and EV, making 7 classes. |
+| D49 | Revenue indicator (2026-10-13) | **A 4th KPI card, "Revenue today"**, with a trend arrow and the M4 what-if delta against the baseline. |
+| D50 | Revenue sub-line (2026-10-13) | **"At risk"**: the booked rates of customers who have waited more than 20 sim-min at the counter. It is a pure metric: customers never walk away, so the M7 calibration (§12.4) holds. |
+| D51 | Ready lot (2026-10-13) | **Grouped by size.** The 3 existing rows become **Cars** (economy, sedan, luxury), **SUVs & vans** (SUV, minivan, pickup) and **EV**. No road or walkway changes. |
+| D52 | Environment (2026-10-13) | **All four:** fog and morning mist, thunderstorm and lightning, wind and foliage, and ambient particles. |
+| D53 | Sound (2026-10-13) | **Procedural Web Audio, muted by default.** A speaker toggle in the top bar, remembered per browser. |
+| D54 | Notifications (2026-10-13) | **In-app toasts** for warning and critical alerts. No OS notifications. |
+| D55 | Proposed defaults (2026-10-13) | **Fog and Thunderstorm are new weather modes** (6 in all). The rates, intervals and mix are as in FE-2, and the fleet mix keeps the row shares at 40/25/35. All values are configurable. **To be confirmed with this doc.** |
+
+### 14.2 Fleet and economics (simulation)
+- **FE-1 Classes.**
+  - `VehicleClass` becomes `economy | sedan | luxury | suv | minivan | pickup | ev`.
+  - Energy type is a property of the class: only EVs are electric, and every other class burns petrol. One helper, `energyOf(cls)`, replaces the scattered `cls === 'ev'` checks.
+- **FE-2 Per-class table** (one config table, typed so that every class must have an entry). All rates are fictional.
+
+  | Class | Model label | Mix | Size L × W (m) | Rate / day | Service every | Lot row |
+  |---|---|---|---|---|---|---|
+  | Economy | Economy hatchback | 15% | 4.1 × 1.75 | $42 | 5,000 mi | Cars |
+  | Sedan | Mid-size sedan | 20% | 4.8 × 1.85 | $55 | 6,000 mi | Cars |
+  | Luxury | Premium saloon | 5% | 5.1 × 1.9 | $119 | 7,500 mi | Cars |
+  | SUV | Full-size SUV | 15% | 5.3 × 2.0 | $78 | 6,000 mi | SUVs & vans |
+  | Minivan | 7-seat minivan | 5% | 5.15 × 2.0 | $89 | 5,500 mi | SUVs & vans |
+  | Pickup | Crew-cab pickup | 5% | 5.8 × 2.0 | $84 | 4,500 mi | SUVs & vans |
+  | EV | Compact EV crossover | 35% | 4.75 × 1.92 | $68 | 10,000 mi | EV |
+
+  The fleet stays at **120**. Each row keeps its share (Cars 40%, SUVs & vans 25%, EV 35%), so the load on the energy station and the lot is the same as in M7.
+- **FE-3 Lot rows (D51).**
+  - Ready-lot stalls are tagged by row (`cars`, `large`, `ev`) instead of by class. Stall IDs become `cars-01`…`cars-18`, `large-01`…`large-12` and `ev-01`…`ev-18`, and are shown as e.g. "Cars row · stall 4".
+  - A car stages in its class's row. The existing fallback to any free stall after 120 s is kept.
+  - A customer is matched to a car of the class they booked; failing that, any car in the same row; failing that, any ready car (as today).
+  - Stalls are 9 m deep, so the 5.8 m pickup fits. The no-overlap rules (L-4) are unchanged.
+- **FE-4 Mileage-based maintenance.**
+  - Each vehicle tracks the odometer reading at its last service. New vehicles start part-way through their interval, so they don't all fall due together.
+  - At inspection, a vehicle whose mileage since its last service has reached its class interval is flagged for **scheduled service** (a new reason, alongside tyres, oil and damage).
+  - Otherwise, a random wear or damage roll can still flag it. Its chance drops from 10% to about 4%, so the **total flag rate stays at about 8–12% of inspections** (calibrated in Stage 4).
+  - Only the random damage path can be **severe** and need the tow truck (L-1 step 4); a scheduled service never is.
+  - Finishing service resets the vehicle's last-service mileage to its odometer.
+- **FE-5 Revenue.**
+  - A rental is booked when the car leaves through the exit gate on rent. Its value is **the booked class's daily rate × billed days**, where billed days = max(1, ⌈rental hours ÷ 24⌉).
+  - The booked class is the one the customer asked for. If they get a different class (FE-3 fallback), they still pay the booked rate: an upgrade is free.
+  - The simulation exposes: revenue today (reset at hub midnight), total revenue since load, rentals today, and **at risk** (the sum of booked rates of customers who have waited more than 20 sim-min at the counter, with their count).
+  - The checkout event (and the checkout log) gains the class and the daily rate.
+- **FE-6 Weather modes (D55).** Two modes are added to the weather menu, the deep link (`weather=fog|storm`), both simulations and the preset restore (S-5):
+
+  | Mode | Simulation |
+  |---|---|
+  | Fog | Vehicle speeds −15% |
+  | Thunderstorm | Vehicle speeds −25% (heavier than rain) |
+
+  Demand and charging are at baseline in both.
+- **FE-7 Determinism and baseline.** Seed plus command log still reproduces a run (S-15), and the shadow baseline runs the same rules (S-16). The random draw order changes, so seeded reference values in existing tests are updated, each with a note.
+
+### 14.3 Dashboard
+- **FE-8 Revenue KPI card (D49, D50).**
+  - A 4th card: **"Revenue today $18,420"**, with a trend arrow like the others.
+  - Sub-line: **"At risk $1,240 · 18 waiting > 20 min"**, or "No customers at risk".
+  - During a what-if scenario (S-12) it shows the delta against the baseline, e.g. "−$2.1k vs normal". Up is good. A delta inside the noise band (the larger of $500 and 3%) reads "≈ normal".
+  - On a phone the 4 cards wrap to 2 × 2.
+- **FE-9 Class details everywhere.**
+  - Model labels as in FE-2.
+  - The vehicle detail panel adds "Rate $84/day" and "Next service in 1,240 mi (every 4,500 mi)".
+  - The Active fleet tracker shows the model label. The Customer checkout log gains Class and Rate columns.
+  - A scheduled service raises a warning alert: "GL-PGW-04817 · Crew-cab pickup · scheduled service (4,500 mi)".
+
+### 14.4 World visuals
+- **FE-10 New vehicles.** Pixar-style (V-1), without real-brand cues (N-7), each fitting its footprint:
+  - **Economy hatchback:** short, two-box, with a steep tail.
+  - **Premium saloon:** long, low and sleek, with a bright beltline trim.
+  - **7-seat minivan:** tall and rounded, with a sliding-door line and a long glasshouse.
+  - **Crew-cab pickup:** a four-door cab with an open bed and tailgate.
+
+  All get the GoldLane livery (B-4) and glowing lights at night (V-2). Each class costs 3 instanced draw calls, as today.
+- **FE-11 Fog and morning mist.**
+  - **Fog mode:** dense, light-grey distance fog; a desaturated sky; soft halos around street lights, floodlights and runway lights; headlights and runway lights on in daytime.
+  - **Morning mist** (visual only): in clear and overcast weather, a light ground mist from 05:00, fading out between 08:30 and 09:30 hub time. The hub opens at 08:00, so a viewer sees it lift.
+- **FE-12 Thunderstorm and lightning.**
+  - Heavier rain slanted by the wind, a darker sky with full cloud cover, and wet ground (as in rain).
+  - **Lightning:** strikes on a deterministic schedule, one every 8–25 s. Each strike briefly brightens the sky and the scene and shows a distant bolt, and its thunder follows 1–4 s later.
+  - **Photosensitivity safety (WCAG 2.3.1):** at most one strike per 8 s, flicker no faster than 3 Hz, and a capped brightness jump. With reduced motion, a strike is only a soft 0.5 s brightening of the sky, with no bolt and no flicker.
+- **FE-13 Wind.**
+  - Wind has a direction, a strength and gusts. It follows the time of day and the weather: calm overnight and in fog, breezy in the afternoon, strong in a thunderstorm.
+  - It drives: trees, palms and bushes swaying; the flags (B-2); the slant of the rain; the drift of the clouds; a new windsock beside the runway; and drifting leaves (storm, wind) or dust (heatwave).
+- **FE-14 Ambient particles.**
+  - Exhaust puffs from **petrol cars only** (EVs have none) as they pull away.
+  - Spray and steam at a wash bay while it is in use.
+  - Splash rings on the ground in rain and thunderstorms.
+  - Jet exhaust on the take-off roll, and a tyre-smoke puff at touchdown.
+  - Leaves in strong wind, and dust in a heatwave.
+- **FE-15 Quality tiers and reduced motion.**
+
+  | | Sway | Particles | Lightning |
+  |---|---|---|---|
+  | Tier 0 | Yes | All | Flash and bolt |
+  | Tier 1 | Yes | Half | Flash and bolt |
+  | Tier 2 | No | None | Flash only |
+  | Reduced motion | No | None | Soft brightening only |
+
+  Rain still falls with reduced motion, as today. Fog and mist show on every tier.
+
+### 14.5 Sound (D53)
+- **FE-16 Soundscape.** Everything is synthesized in the browser with the Web Audio API (oscillators and generated noise). There are no audio files, no network requests and no CSP change (N-1, SH-4).
+  - **Beds** that cross-fade with the conditions: hub hum and traffic by day, crickets at night, rain, thunderstorm, wind (with its strength) and heatwave cicadas.
+  - **Cues:**
+    - an exit-gate checkout beep and the barrier motor
+    - the wash whir while a bay is busy
+    - jet engines spooling and roaring at take-off and landing
+    - thunder after each lightning strike
+    - warning and critical alert chimes, and a soft ping with each toast
+- **FE-17 Spatial mix.**
+  - World cues are louder the closer they are to the camera's focus and the more it is zoomed in. They are panned left or right by their position on screen.
+  - At most 16 sounds play at once, and each source has a cool-down so it never machine-guns.
+- **FE-18 Controls.**
+  - **Muted by default.** A speaker button in the top bar, or the `M` key, turns sound on and off. Browsers allow audio only after a user gesture; that click is it.
+  - A volume slider in the user menu.
+  - On/off and volume are remembered per browser, like the theme (X-4). A failure to save is harmless.
+  - Paused simulation (S-18): the beds fade down and world cues stop; alert chimes still play.
+  - A hidden tab suspends all sound.
+  - The help overlay (SH-12) lists `M` and the speaker button.
+  - Embed mode (SH-8) shows no speaker button and stays silent. Kiosk mode keeps whatever the viewer set.
+
+### 14.6 Notifications (D54)
+- **FE-19 Toasts.**
+  - New **warning** and **critical** alerts (D-8) also pop up as toasts at the top right, under the bell. Info alerts don't.
+  - At most 3 toasts are visible. More collapse into a "+n more" toast that opens the alerts menu.
+  - Repeats of the same alert kind on the same unit within 2 real minutes merge into one toast with a count ("×3").
+  - Warnings dismiss themselves after 6 s and criticals after 12 s. The timers pause while the pointer is over a toast or it has focus.
+  - Clicking a toast selects its vehicle or unit (as an alert item does) and marks it read. A × button dismisses it.
+  - With sound on, a toast plays its chime.
+- **FE-20 Toast controls and accessibility.**
+  - A "Pop-up alerts" switch in the user menu, on by default and remembered per browser.
+  - Warnings are announced politely (`role="status"`) and criticals assertively (`role="alert"`).
+  - Toasts are keyboard-reachable buttons, and their text never relies on colour alone.
+  - Hidden in embed and kiosk modes. On a phone, one toast at a time, full width.
+
+### 14.7 Budgets and non-functional
+- **Draw calls:** M9 adds at most 20 at tier 0 (12 for the 4 new classes, plus particles, halos and the bolt) and at most 14 at tier 2. The limits stay: ≤ 300 at tier 0 and ≤ 150 at tier 2, at night in a thunderstorm. **Risk:** the tier 2 headroom is measured before Stage 4 starts.
+- **Bundle:** at most +40 KB gzipped (limit 600 KB).
+- **Simulation:** both simulations at 45× stay ≤ 4 ms per frame (§9.6).
+- **Audio:** at most 16 voices, and no work at all while muted (the audio context isn't created until sound is first turned on).
+- **Accessibility (N-5):** every new control is labelled and keyboard-reachable; lightning follows FE-12; reduced motion follows FE-15.
+- **Unchanged:** N-1, N-6, N-7, and every M1–M8 requirement and test, apart from the seeded reference values (FE-7) and the class and stall IDs (FE-1, FE-3), which are updated with notes.
+
+### 14.8 Calibration
+- The day-long soak (§12.5) gains 7-class runs and the two new modes:
+  - **Fog:** the Balanced targets, with turnaround ≤ 50 min.
+  - **Thunderstorm:** a stress case like heatwave: served ≥ 85%, no overlap or gridlock, and queues recover after each peak.
+- Every §12.4 target is re-verified with 7 classes.
+- The maintenance flag rate is 8–12% of inspections over a day.
+
+### 14.9 User stories
+- As an **ops manager**, I glance at "Revenue today $18,420 · At risk $1,240" and see what the counter backlog is costing.
+- As an **ops manager**, I run "Gate closure" and the revenue card reads "−$2.4k vs normal".
+- As an **ops manager**, a toast pops up: "GL-PGW-04817 · Crew-cab pickup · scheduled service (4,500 mi)". I click it, the camera follows the pickup, and its panel shows its rate and service interval.
+- As a **viewer**, I switch to Thunderstorm at night: palms bend, rain slants, lightning lights up the runway, and with sound on I hear the thunder roll in a few seconds later.
+- As a **viewer**, I open the hub at 08:00 and watch the morning mist lift as the first jets spool up.
+- As a **viewer** in fog, street lights wear soft halos and traffic slows.
+- As a **viewer**, I can tell an economy hatch, a premium saloon, a minivan and a pickup apart from above.
+
+### 14.10 Resolved (approved 2026-10-13: all proposed defaults accepted)
+- **Q1 Rates, intervals and mix:** **as in FE-2.**
+- **Q2 Fog and Thunderstorm:** **new weather modes** (6 in all).
+- **Q3 Speed factors:** **fog −15%, thunderstorm −25%.**
+- **Q4 Revenue reset:** **at hub midnight** ("Revenue today"); the running total is in the test hooks only.
+- **Q5 Mute key:** **`M`** (no existing shortcut uses it).
+- **Draw-call risk (§14.7), measured:** the highest tier-2 count so far is 76 (M6, airport area), so +14 stays well under 150.
 

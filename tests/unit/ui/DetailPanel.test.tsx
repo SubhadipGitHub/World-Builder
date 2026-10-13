@@ -26,6 +26,8 @@ const base: AgentView = {
   fuelPct: null,
   socPct: 64.2,
   odometerMi: 12_345,
+  ratePerDay: 68,
+  milesToService: 4_200,
   task: 'Charging at charger3',
   etaSimSec: 725,
   parentId: null,

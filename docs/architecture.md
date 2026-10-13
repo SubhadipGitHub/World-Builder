@@ -1250,3 +1250,269 @@ FlightSchedule.nextTouchdown(t: number): number | null
 - **Production bundle:** 228.7 KB gzipped (budget 600 KB; +6.4 KB over M7, within the +15 KB M8 budget), with no test hooks.
 - **Workflows:** shape and order are pinned by unit tests. They run for real only after the user pushes: Pages needs "Settings → Pages → Source: GitHub Actions", and a Release needs a pushed `v0.8.0` tag.
 
+## 22. M9: Fleet economics, sound, weather FX and notifications (design approved 2026-10-13)
+
+Implements requirements §14 (FE-1…FE-20, D48–D55). It has four parts:
+1. **Simulation:** 7 classes, per-class config, mileage service and revenue.
+2. **Render:** new silhouettes; fog, storm, wind and particles as pure schedules plus thin Three.js views.
+3. **Audio:** a new `src/audio/` layer, with a pure cue planner and a Web Audio engine.
+4. **UI:** a 4th KPI card, toasts and sound controls.
+
+The core rule (§1) holds: render, audio and UI only read snapshots and events, and only weather goes back into the simulation as a command.
+
+### 22.1 Component breakdown
+| Module | Kind | Responsibility |
+|---|---|---|
+| `src/config/fleet.ts` (new) | pure data | `FLEET_CLASSES: Record<VehicleClass, FleetClass>` (label, mix, length, width, `ratePerDay`, `serviceIntervalMi`, `row`, `energy`), `LOT_ROWS` (`cars`, `large`, `ev`, with their labels and stall counts 18/12/18), and the helpers `energyOf(cls)` and `rowOf(cls)`. `facility.fleetMix` and `readySlots` are derived from it, so there is one source. |
+| `src/config/facility.ts` | pure data | `dimensions` takes the fleet classes' sizes from `FLEET_CLASSES` and keeps the other agent kinds. |
+| `src/config/rates.ts` | pure data | `maintenanceChance` 0.10 → 0.04 (calibrated in Stage 4), `atRiskWaitSimSec: 1200` |
+| `src/config/weather.ts` | pure data | `fog` (speed ×0.85) and `storm` (speed ×0.75) added; menu order Clear, Overcast, Fog, Heavy rain, Thunderstorm, Heatwave |
+| `src/sim/types.ts` | contract | `VehicleClass` with 7 members, `LotRow`, `EnergyKind` |
+| `src/sim/world.ts` | sim | Fleet build from the mix; matching by class, then row, then any car; `lastServiceMi`; the scheduled-service rule at inspection; the revenue ledger; `Customer.arrivedAt` and `bookedCls`; `energyOf` replaces `cls === 'ev'` |
+| `src/sim/revenue.ts` (new) | pure | `billedDays(rentalSec)`, `bookingValue(bookedCls, rentalSec)`, `createRevenueLedger()` (`book(amount, simTimeSec)`, day reset at hub midnight), `atRisk(customers, now)` |
+| `src/sim/maintenance.ts` (new) | pure | `serviceDue(odometerMi, lastServiceMi, cls)`, `milesToService(...)`, `initialLastService(odometerMi, cls, rng)` |
+| `src/layout/hub.ts` | layout | `ROWS` keyed by `LotRow` (same x, stalls and geometry); stall ids `cars-NN`, `large-NN` and `ev-NN`, tagged by row; walkway routes keyed by row; `TOW_CARRY` uses the longest fleet class (the 5.8 m pickup) |
+| `src/render/assets/vehicles.ts` | render | `economy` and `luxury` as `CARS` shape entries for the `car()` builder; `minivan()` (built on the van builder) and `pickup()` (a new cab-and-bed builder) |
+| `src/render/agents.ts` | render | `CAPACITY` and `FLEET_KEYS` for the 7 classes, derived from `FLEET_CLASSES` |
+| `src/render/wind.ts` (new) | pure | `windAt(clockHours, weather, tSec): Wind`: deterministic, smooth day curve × weather × gust noise |
+| `src/render/lightning.ts` (new) | pure | `createLightningSchedule(seed)`: `strikeAt(t)` / `strikesBetween(t0, t1)` and `flashLevel(t, opts)` (envelope, ≤ 3 Hz flicker, capped) |
+| `src/render/particles.ts` (new) | pure and Three.js | The pure part: `ParticlePool` (fixed capacity, ring buffer, emit, step, cap per tier) and `emittersFor(...)` (exhaust from petrol movers, wash bays in use, splashes, jet phases, leaves and dust). The view part: 2 instanced billboard meshes (normal and additive blending). |
+| `src/render/foliageSway.ts` (new) | Three.js | An `onBeforeCompile` patch for the foliage material: sway by world height × wind uniforms (strength, direction, time). With the uniforms at zero it is off, and on tier 2 or with reduced motion the patch is not used at all. |
+| `src/render/halos.ts` (new) | Three.js | Instanced additive sprites at lamp heads (lamp, flood and mast positions) and runway lights, with opacity = lamp level × fog or mist amount. One draw call. |
+| `src/render/bolt.ts` (new) | Three.js | A distant bolt ribbon, regenerated from the strike seed, shown for its strike envelope. One draw call. |
+| `src/render/windsock.ts` (new) | Three.js | A pole and a cone beside the runway (merged into the airport static mesh); the cone is one small mesh oriented by the wind |
+| `src/render/environment.ts` | pure | `Environment` gains `fog: boolean`, `storm: boolean`, `mist` (0–1), `wind: Wind`, `flash` (0–1, already capped) and `headlightsByDay`. `WEATHER_LIGHT` gains fog and storm. |
+| `src/render/atmosphere.ts`, `sky.ts`, `rain.ts` | render | The flash added to hemisphere light and the sky; fog and mist density and colour; storm cloud cover; rain slant from the wind, and storm intensity (opacity ×1.3, streak length) |
+| `src/audio/cues.ts` (new) | pure | `planCues(input): Cue[]` and `bedMix(env, opts): BedGains` (§22.3). No Web Audio. |
+| `src/audio/synth.ts` (new) | Web Audio | Voice factories: `noiseBuffer(ctx, colour)` (white, pink or brown, generated once per context), `bed(kind)`, `beep`, `chime(severity)`, `jet(phase)`, `thunder(distance)`, `whir`, `motor`, `ping` |
+| `src/audio/engine.ts` (new) | Web Audio | `createSoundEngine({ createContext })`: the lazy context, the master gain and volume, the 16-voice cap (the quietest is stolen), spatial gain and pan, visibility suspend, and pause ducking |
+| `src/airport/phases.ts` (new) | pure | `phaseChanges(prev, next)`: per-aircraft phase transitions between two frames (take-off roll, touchdown) for audio and particles |
+| `src/ui/toasts.ts` (new) | pure | `createToastStore({ now })`: `ingest(alerts)`, `tick(nowMs)`, `hover(id, on)`, `dismiss(id)`, `visible()` and `overflow()`; the merge rule, auto-dismiss and severity filter |
+| `src/ui/m9/Toasts.tsx`, `SoundButton.tsx`, `VolumeSlider.tsx` (new) | Preact | Toast stack (roles per severity), the speaker toggle (`aria-pressed`) and the volume range input |
+| `src/ui/kpis.ts`, `src/ui/m2/KpiCards.tsx` | UI | `KpiId` gains `'revenue'`; the 4th card; `formatMoney` and `formatMoneyShort` in `src/ui/format.ts` |
+| `src/ui/scenario.ts`, `src/config/scenarios.ts` | UI | `kpiDelta` supports a `usd` unit ("−$2.1k vs normal"); the noise band becomes a function: `max(500, 3% of baseline)` for revenue |
+| `src/ui/format.ts`, `tables.ts`, `m1/DetailPanel.tsx`, `alerts.ts` | UI | Class labels from `FLEET_CLASSES`; the stall label regex for the row ids; the rate and next-service lines; Class and Rate columns in the checkout log; the scheduled-service alert text |
+| `src/ui/m2/TopBar.tsx` | UI | `SoundButton` next to the bell; the "Pop-up alerts" switch and `VolumeSlider` in the user menu; the weather `<select>` lists 6 modes |
+| `src/ui/prefs.ts` | UI | Reused `loadFlag`/`saveFlag` for `goldlane.sound` (default off) and `goldlane.toasts` (default on); new `loadNumber`/`saveNumber` for `goldlane.volume` (0–100, default 60, clamped) |
+| `src/share/help.ts`, `link.ts` | pure | `M` in `SHORTCUTS`; `weather` accepts `fog` and `storm` (derived from `weatherModes`, so this is automatic) |
+| `src/app/main.ts` | wiring | §22.4 |
+
+### 22.2 Key decisions
+| # | Decision | Why |
+|---|---|---|
+| F1 | **One fleet table (`config/fleet.ts`) drives the simulation, layout, render and UI.** `fleetMix`, `readySlots`, `dimensions`, model labels, instance capacities and rates are all derived from it, and it is typed `Record<VehicleClass, …>`, so adding a class without every field is a compile error. | FE-1, FE-2. It removes about 15 hard-coded class lists. |
+| F2 | **Energy is a class property.** `energyOf(cls)` is the only test for EV vs petrol. An ESLint `no-restricted-syntax` rule bans the literal comparison `cls === 'ev'` outside `config/fleet.ts`. | So that no stray `=== 'ev'` survives the refactor; the lint gate enforces it. |
+| F3 | **Fleet build is exact, not rounded per class.** Counts use the largest-remainder method over the mix, so they sum to 120 (15/20/5/15/5/5/35% gives 18/24/6/18/6/6/42 exactly). Vehicles are built in `FLEET_CLASS_ORDER`, then shuffled with the seeded RNG as today. | FE-2 row shares stay at 48/30/42. Deterministic. |
+| F4 | **Lot stalls are tagged by row.** `requestSlot(rowOf(v.cls))` replaces `requestSlot(v.cls)`. The 120 s any-slot fallback is unchanged. Customer matching is three passes over the ready cars (class, then row, then any), in the existing order, with no new random draws. | FE-3, D51. There is no change to the lane graph, so L-4 proofs and the lot soak hold. |
+| F5 | **Mileage service is computed from state, with one extra draw per vehicle at fleet build.** `lastServiceMi = odometer − U(0, interval)`. At inspection, `due` is checked first; if due, there is no random roll (`reason: 'interval'`, `severe: false`). Otherwise the existing `chance(maintenanceChance)` and `chance(severeChance)` draws run as today. Service completion sets `lastServiceMi = odometerMi`. | FE-4. Severe and the tow stay random-only. The draw order changes in one well-defined place (FE-7). |
+| F6 | **Revenue is booked at `rent.add`** (when the car exits, `world.ts:725`), where the rental duration is drawn: `bookingValue(bookedCls, durationSec)`. Billed days are `max(1, ceil(duration / 86400))`. The vehicle carries `bookedCls` from the matched customer to the exit. | FE-5. It reuses the existing draw, so no new randomness. An upgrade costs the booked rate. |
+| F7 | **The ledger resets on the hub clock day boundary.** `ledger.book` compares `floor(clockSec / 86400)` with the last booking's day; `revenueToday` resets lazily in `metrics()` too, so a quiet midnight still reads $0. | FE-5, Q4. Pure and testable with synthetic times. |
+| F8 | **At risk = counter customers with `now − arrivedAt > 1200 sim-s`.** `Customer` gains `arrivedAt` and the already-drawn `cls`. It's computed in `metrics()` (O(counter queue), ≤ a few dozen). | D50. It's a pure read, so there is no behaviour change and the M7 calibration holds. |
+| F9 | **`Metrics` gains `revenue: { today, total, rentalsToday, atRisk, atRiskCount }`.** The baseline sim computes the same, so the M4 delta works unchanged. | FE-8, S-12. |
+| F10 | **New weather modes are just new rows** in `weather.ts` and `WEATHER_LIGHT`. Everything typed `Record<WeatherMode, …>` (sky, environment, the link allow-list, the select, the soak matrix) must add them, which the compiler enforces. `storm` reuses the rain visuals (`rain: true`, wetness 1) and adds `storm: true`. | FE-6. No special cases. |
+| F11 | **Lightning, wind and mist are render-side pure functions of (hub clock, weather, seed, wall time).** They are not in the simulation: they change nothing the simulation computes (D20 spirit), so baseline determinism is untouched. The lightning schedule is seeded from the link seed and uses airport-style wall time (so it pauses with the sim). | FE-12, FE-13, FE-11. Testable without a GPU. |
+| F12 | **Photosensitivity is enforced in `flashLevel`.** Strikes are ≥ 8 s apart. A strike's envelope is at most 2 pulses, 400 ms apart (2.5 Hz < 3 Hz), each ≤ 120 ms rise and 250 ms decay, with the peak added to ambient light capped at +0.6 (and sky luminance at +35%). With `reducedMotion`, there is one pulse with a 500 ms rise and fall, peak +0.25, and no bolt. | FE-12, WCAG 2.3.1. Tested numerically. |
+| F13 | **Foliage sway is a vertex shader patch**, not CPU instance updates: `offset = dir × strength × (0.15 + 0.85 × gust) × h² × sin(t × ω + phase(instancePos))`, where h is height above the instance base (the trunk base stays put). Three uniforms per material, updated once per frame. | FE-13 at zero CPU cost and zero extra draw calls. |
+| F14 | **One particle pool, two draw calls.** A fixed-capacity ring buffer (tier 0: 600, tier 1: 300, tier 2: 0) on `InstancedMesh` billboards, with per-instance colour and opacity in instance attributes. Emitters are pure functions of the snapshot, environment and phase changes; the RNG is seeded per frame index, so tests are reproducible. Petrol only: exhaust is skipped when `energyOf(cls) === 'electric'`. | FE-14, FE-15. Bounded memory and draw calls. |
+| F15 | **Audio is two layers.** `cues.ts` is pure: from (new sim events, aircraft phase changes, lightning strikes, new toasts, environment, camera target and distance, the projected screen x of sources) it returns `Cue[]` with `{ kind, gain, pan, delaySec, sourceKey }` and the bed gains. `engine.ts` turns cues into Web Audio nodes. All rules (falloff, cool-downs, pause, mute) live in the pure part. | FE-16, FE-17. The rules are unit-testable in Node; the browser part is thin. |
+| F16 | **Spatial falloff:** `gain = base × clamp01(1 − d / R) ^ 2 × zoomFactor`, with R = 250 m from the camera target and `zoomFactor = clamp(180 / cameraDistance, 0.25, 1)`. Pan = projected screen x mapped to [−0.8, 0.8]. Jets and thunder use R = 1,500 m. Cool-downs per `sourceKey`: gate beep 2 s, chimes 1 s, jets 5 s, whir as a held loop. | FE-17. Close things are loud, the overview is calm, and nothing machine-guns. |
+| F17 | **The `AudioContext` is created only in the click or `M` handler** that turns sound on. With a saved "on" preference, the engine is armed: it creates the context on the first pointer or key gesture (browsers block it before). `visibilitychange` → `ctx.suspend()` / `resume()`. Speed 0 → bed gain ×0.2 over 0.5 s, and world cues are dropped. Embed mode never creates the engine. | FE-18, the autoplay policy, and "no work while muted" (§14.7). |
+| F18 | **No audio files, no CSP change.** All sources are `OscillatorNode` or `AudioBufferSourceNode` over noise buffers generated in JS (≈ 2 s per colour, looped). An E2E test asserts no requests and the CSP string unchanged. | FE-16, N-1, SH-4. |
+| F19 | **Toasts are a pure store over the alert feed.** `toasts.ingest(alerts)` takes newly created warning or critical alerts. The merge key is `kind + (unitId ?? vehicleId)` within a 120 s wall-time window: the count increments and the timer resets. At most 3 are visible; the rest are counted in `overflow()`. Timers use wall milliseconds (they run while the sim is paused) and stop while hovered or focused. | FE-19. Deterministic tests with an injected clock. |
+| F20 | **Alert kinds become explicit.** `Alert` gains `kind: 'maintenance' \| 'service' \| 'tow' \| 'queue' \| 'lowSoc' \| 'scenario'`, used for the toast merge key and the chime choice. | FE-19, FE-16. |
+| F21 | **Toast accessibility:** each toast is an `<li>` holding a button (select) and a × button. Warnings render inside one `role="status" aria-live="polite"` region, criticals inside `role="alert"`. Hidden when `mode !== 'normal'` or the switch is off. Under the phone breakpoint, 1 is visible and it is full width. | FE-20. |
+| F22 | **The revenue card's delta uses a currency unit.** `kpiDelta('revenue', s, b)`: the band is `max(500, 0.03 × b)`, and the text uses `formatMoneyShort` ("−$2.1k"). Up is good. | FE-8. Reuses the S-12 path. |
+
+### 22.3 Contracts
+```ts
+// config/fleet.ts
+type VehicleClass = 'economy' | 'sedan' | 'luxury' | 'suv' | 'minivan' | 'pickup' | 'ev';
+type LotRow = 'cars' | 'large' | 'ev';
+type EnergyKind = 'electric' | 'petrol';
+interface FleetClass { label: string; mix: number; length: number; width: number; ratePerDay: number; serviceIntervalMi: number; row: LotRow }
+const FLEET_CLASSES: Readonly<Record<VehicleClass, FleetClass>>;
+const FLEET_CLASS_ORDER: readonly VehicleClass[];          // economy, sedan, luxury, suv, minivan, pickup, ev
+const LOT_ROWS: Readonly<Record<LotRow, { label: string; stalls: number }>>; // Cars 18 · SUVs & vans 12 · EV 18
+energyOf(cls: VehicleClass): EnergyKind;   rowOf(cls: VehicleClass): LotRow;
+fleetCounts(size: number): Record<VehicleClass, number>;  // largest remainder, sums to size
+
+// sim/maintenance.ts
+serviceDue(odometerMi: number, lastServiceMi: number, cls: VehicleClass): boolean;
+milesToService(odometerMi: number, lastServiceMi: number, cls: VehicleClass): number;   // ≥ 0
+// sim/revenue.ts
+billedDays(rentalSec: number): number;                     // max(1, ceil(sec / 86400))
+bookingValue(bookedCls: VehicleClass, rentalSec: number): number;
+interface RevenueView { today: number; total: number; rentalsToday: number; atRisk: number; atRiskCount: number }
+createRevenueLedger(): { book(amount: number, clockSec: number): void; view(clockSec: number): Pick<RevenueView, 'today' | 'total' | 'rentalsToday'> };
+atRisk(customers: readonly { cls: VehicleClass; arrivedAt: number }[], nowSimSec: number, waitSec: number): { amount: number; count: number };
+
+// sim/world.ts (additive)
+Metrics.revenue: RevenueView
+AgentView.ratePerDay: number | null                        // fleet only
+AgentView.milesToService: number | null                    // fleet only
+SimEvent maintenanceFlagged.reason: 'tyres' | 'oil' | 'damage' | 'interval'
+SimEvent checkout += { cls: VehicleClass; ratePerDay: number }
+
+// render/wind.ts
+interface Wind { dirRad: number; strength: number; gust: number }           // strength, gust ∈ [0, 1]
+windAt(clockHours: number, weather: WeatherMode, tSec: number): Wind;
+// render/lightning.ts
+interface Strike { t: number; seed: number; distanceM: number; thunderDelaySec: number; azimuthRad: number }
+createLightningSchedule(seed: string): { strikesBetween(t0: number, t1: number): readonly Strike[]; last(t: number): Strike | null };
+flashLevel(t: number, strike: Strike | null, opts: { reducedMotion: boolean }): { light: number; sky: number; bolt: boolean };
+// render/particles.ts (pure part)
+type ParticleKind = 'exhaust' | 'spray' | 'steam' | 'splash' | 'jetExhaust' | 'tyreSmoke' | 'leaf' | 'dust';
+particleCap(tier: number, reducedMotion: boolean): number;      // 600 / 300 / 0; 0 with reduced motion
+createParticlePool(cap: number): { emit(p: ParticleSeed): void; step(dt: number): void; live(): number; forEach(fn): void };
+// render/environment.ts (additive)
+Environment += { fog: boolean; storm: boolean; mist: number; wind: Wind; flash: number; headlightsByDay: boolean }
+
+// airport/phases.ts
+interface PhaseChange { id: string; from: FlightPhase; to: FlightPhase; x: number; z: number }
+phaseChanges(prev: readonly AircraftPose[], next: readonly AircraftPose[]): PhaseChange[];
+
+// audio/cues.ts
+type BedKind = 'hub' | 'night' | 'rain' | 'storm' | 'wind' | 'cicadas';
+type CueKind = 'gateBeep' | 'barrier' | 'jetTakeoff' | 'jetLanding' | 'thunder' | 'chimeWarning' | 'chimeCritical' | 'ping';
+interface Cue { kind: CueKind; gain: number; pan: number; delaySec: number; sourceKey: string }
+interface CueInput {
+  events: readonly SimEvent[]; phases: readonly PhaseChange[]; strikes: readonly Strike[]; newToasts: readonly Toast[];
+  listener: { x: number; z: number; distance: number }; project(x: number, z: number): number | null;  // screen x in [-1, 1]
+  gateAt(gateId: string): Vec2; paused: boolean; nowSec: number;
+}
+createCuePlanner(): { plan(input: CueInput): Cue[] };      // holds cool-down state
+bedMix(env: Environment, o: { paused: boolean; washBusy: number; listenerDistance: number }): Record<BedKind | 'whir', number>;
+// audio/engine.ts
+interface SoundEngine { enable(): void; disable(): void; setVolume(v01: number): void; play(cues: readonly Cue[]): void; setBeds(g: Record<string, number>): void; state(): { created: boolean; running: boolean; voices: number } }
+createSoundEngine(deps: { createContext: () => AudioContext; doc: Pick<Document, 'addEventListener' | 'visibilityState'> }): SoundEngine;
+
+// ui/toasts.ts
+interface Toast { id: string; alertId: string; severity: 'warning' | 'critical'; message: string; count: number; vehicleId: string | null; unitId: string | null }
+createToastStore(o: { maxVisible: number }): {
+  ingest(alerts: readonly Alert[], nowMs: number): Toast[];   // returns the newly shown toasts (for chimes)
+  tick(nowMs: number): void; hold(id: string, on: boolean, nowMs: number): void; dismiss(id: string): void;
+  visible(): readonly Toast[]; overflow(): number; setEnabled(on: boolean): void;
+};
+// ui/kpis.ts
+type KpiId = 'turnaround' | 'utilisation' | 'evSoc' | 'revenue';
+// test hooks (test builds only):
+//   audioState(), toasts(), revenue(), wind(), lightning(), particleCount(), forceAlert(kind, targetId), advanceWall(ms)
+```
+
+### 22.4 Wiring (`main.ts` frame loop)
+1. The existing steps run unchanged: step `baseline` and `sim`, read the snapshot, then `events = sim.drainEvents()`.
+2. `alertFeed.ingest(events)` returns the alerts it created (the API gains a return value), then `newToasts = toasts.ingest(created, wallMs)`.
+3. Compute `env = environmentFor(…)`. Wind, mist and the flash come from `windAt`, `lightning.strikesBetween(prevT, t)` and `flashLevel`.
+4. `phases = phaseChanges(prevAircraft, aircraft)`, then `particles.update(snapshot, env, phases, dt)`.
+5. If the sound engine exists: `engine.play(planner.plan({ events, phases, strikes, newToasts, … }))` and `engine.setBeds(bedMix(env, …))`.
+6. Uniforms: foliage sway, flag rate × wind, cloud drift × wind, the rain slant, and the windsock heading.
+7. UI throttle (0.1 s): toasts tick, the KPI cards include revenue, and the TopBar sound state.
+
+### 22.5 Performance plan
+| Item | Cost | Budget |
+|---|---|---|
+| 4 new classes × 3 instanced parts | +12 draw calls (all tiers) | Tier 0 ≤ 300 (measured 142 at the airport at night in rain), tier 2 ≤ 150 (measured 76) |
+| Particles (2), halos (1), bolt (1), windsock cone (1) | +5 at tier 0; at tier 2 only the halos (+1) and the windsock (+1) | M9 total ≤ +20 at tier 0, ≤ +14 at tier 2 |
+| Foliage sway | A vertex shader term; no extra draws | — |
+| Particles | ≤ 600 instance updates per frame at tier 0 (≈ 0.1 ms) | — |
+| Simulation | 7 classes, a 3-pass match, and `atRisk` over the counter queue: O(n), negligible | ≤ 4 ms per frame at 45× with the baseline (§9.6) |
+| Audio | 0 when muted (no context). When on: ≤ 16 voices, 6 looping beds, one shared noise buffer per colour | — |
+| Bundle | Estimated +18–25 KB gzipped (audio ≈ 6, render FX ≈ 8, assets ≈ 4, UI ≈ 4) | ≤ +40 KB, total ≤ 600 KB |
+
+### 22.6 Security and privacy
+- Audio makes no network requests and uses no media elements, so the `default-src 'none'` CSP needs no `media-src` (F18).
+- Toast text is built from simulation data and rendered by Preact as text (no `innerHTML`).
+- Volume and preference values read from `localStorage` are parsed and clamped. An invalid value falls back to the default (as `loadFlag` does).
+- No new deep-link keys (sound cannot be forced on by a link, which would be blocked anyway).
+
+### 22.7 Test plan (Stage 3 preview)
+| Layer | What's tested |
+|---|---|
+| Unit: `config/fleet` | Every class has every field; mix sums to 1; `fleetCounts(120)` = 18/24/6/18/6/6/42 and the rows 48/30/42; `energyOf` (only `ev` is electric); `rowOf`; the stall counts match `facility.readySlots` |
+| Unit: `sim/maintenance`, `sim/revenue` | Due exactly at the interval and not 1 mi before; miles to service never negative; billed days at 0 s, 24 h and 24 h + 1 s; booked value uses the booked class; the ledger's midnight reset (including a lazy reset with no bookings); at risk at 1,199 s and 1,201 s |
+| Unit: `sim/world` | The fleet has 7 classes in the expected counts; a scheduled-service flag carries `reason: 'interval'` and `severe: false`; service resets the mileage; checkout events carry `cls` and the rate; revenue grows after rentals exit; an upgrade books the requested class's rate; class → row → any matching (a fixture with no car of the class); staging by row; S-15 determinism with the new fields; the fog and storm speed factors |
+| Lint | `cls === 'ev'` is reported outside `config/fleet.ts` (rule test) |
+| Soak | The day-long matrix gains fog and storm (§14.8); no overlap or gridlock with the pickup; the flag rate is 8–12%; revenue per day is in a plausible band (≈ $25–40k, as a sanity check, not a target) |
+| Unit: render | The 4 new assets fit their footprints (P10) and their heights are ordered pickup/minivan > SUV > sedan > economy; `windAt` stays in range, is continuous (Δ over 1 s < 0.1) and is calm in fog; lightning: gaps ≥ 8 s over an hour, deterministic per seed, the flash ≤ 3 Hz and capped, reduced motion gives no bolt and a single soft pulse; `particleCap` per tier and with reduced motion; exhaust emitters skip EVs; `environmentFor` for fog, storm and mist at 07:00, 09:00 and 09:31 |
+| Unit: `airport/phases` | Take-off and touchdown are detected once per movement |
+| Unit: `audio/cues` | A checkout gives one gate beep panned toward the gate's screen side; a second within 2 s is dropped; a take-off phase change gives one jet cue; a strike gives thunder with its delay; paused drops world cues but keeps chimes; falloff is 0 beyond R; `bedMix` follows rain, storm, night and wind |
+| Unit: `audio/engine` (a fake `AudioContext`) | No context before `enable()`; the voice cap is 16; hidden → suspend and visible → resume; volume clamped; `disable()` silences |
+| Unit: UI | The toast store: info ignored, the merge ×n within 120 s and a new toast after, max 3 plus overflow, warnings at 6 s and criticals at 12 s, the hold pauses, disabled shows none; `Toasts` roles and buttons; 4 KPI cards and money formatting; the revenue `kpiDelta` and its band; `TopBar` speaker `aria-pressed` and the menu switches; `SHORTCUTS` has `M`; the link accepts fog and storm; class labels; the stall id label "Cars row · stall 4"; detail panel lines; checkout log columns; prefs volume parse and clamp |
+| E2E (`tests/e2e/m9.spec.ts`) | The revenue card shows and grows; the speaker click → `audioState().running`, with no requests and the CSP unchanged; `forceAlert` → a toast → clicking it selects its unit; the toast switch off → none; storm at night: a strike within 30 s and draw calls ≤ 300 at tier 0; tier 2 ≤ 150; fog changes the environment; the 6-mode weather menu; no console errors; bundle ≤ 600 KB |
+
+**Existing tests that change (each with a note):**
+- `kpis.test.ts`: 4 ids instead of 3.
+- `hub.test.ts`: stall ids and tags by row.
+- `format.test.ts`: labels and the stall regex.
+- `vehicles.test.ts`: 7 kinds.
+- `metrics.test.ts`: the EV filter via `energyOf`.
+- `alerts.test.ts`: the `kind` field.
+- Seeded reference values (FE-7).
+
+### 22.8 Risks
+| Risk | Mitigation |
+|---|---|
+| The changed RNG order shifts calibration (turnaround, served %) | The row shares and energy mix are unchanged by design (F3). The day-long soak re-verifies §12.4 in Stage 4, and any retune is recorded as in M7. |
+| The pickup (5.8 m) and minivan change queue spacing and tow carry | The IDM gap uses each car's real length already; `TOW_CARRY` uses the longest class; the overlap soak covers every class |
+| Browser autoplay rules differ (Safari needs a resume inside the gesture) | F17 creates and resumes the context inside the click or key handler. The E2E test runs in Chromium; Safari and Firefox are checked by hand before release. |
+| Lightning harming photosensitive viewers | F12 caps the rate, flicker and brightness, and reduced motion removes flicker, all pinned by unit tests |
+| Toast floods (queue-overflow storms in a surge) | F19 merging, max 3 plus overflow, and the existing alert de-duplication |
+| The foliage shader patch breaking on a three upgrade | It is small and isolated (`foliageSway.ts`), and a unit test asserts the patched shader source contains the injected chunk |
+| Bundle growth | Estimated +25 KB of the +40 KB budget, measured in E2E |
+
+### 22.9 Stage 3 status (2026-10-13)
+- **Contracts, typed and stubbed** (with `notImplemented`, or placeholder values where existing code reads them every frame):
+  - Simulation:
+    - `config/fleet.ts`: real data, with stubbed `energyOf`, `rowOf` and `fleetCounts`
+    - `sim/maintenance.ts`, `sim/revenue.ts` (with `EMPTY_REVENUE`)
+    - `Metrics.revenue`, `AgentView.ratePerDay` and `milesToService` (placeholders)
+    - the `checkout` event gains `cls` and `ratePerDay`; the `'interval'` reason
+  - Render and airport:
+    - `render/wind.ts`, `render/lightning.ts` (with the F12 limits as constants), `render/particles.ts` (pure part) and `render/foliageSway.ts`
+    - `Environment` gains `fog`, `storm`, `mist`, `wind`, `flash` and `headlightsByDay` (placeholders); `EnvironmentOptions` gains `tSec` and `flash`
+    - `airport/phases.ts`
+  - Audio: `audio/cues.ts` (including `spatialGain` and the F16 constants) and `audio/engine.ts`
+  - UI:
+    - `ui/toasts.ts`, `ui/m9/Toasts`, `SoundButton` and `VolumeSlider`
+    - `formatMoney` and `formatMoneyShort`; `loadNumber`/`saveNumber` with the M9 preference keys
+    - `Alert.kind`, and `AlertFeed.ingest` returning the alerts it created
+    - `KpiId` gains `'revenue'`, plus `noiseBand.revenue` and `revenueNoiseShare`
+    - `CheckoutRow.model` and `rate`
+    - `Settings` gains `sound`, `volume` and `toasts`; `DashboardData` gains `toasts` and `toastOverflow`; `DashboardProps.audio` (`AudioActions`); the new `TopBar` props
+  - Test hooks: `audioState`, `toasts`, `revenue`, `wind`, `lightning`, `particleCount` and `forceAlert`
+- **Additions to §22.3 found while writing tests:**
+  - `sim/fleetMatch.ts` `matchCar(want, ready)`: the F4 three-pass match as a pure function, so it is testable without staging a world.
+  - `maintenanceFlagged` gains `cls`, because the FE-9 alert text names the model.
+  - `exhaustEmitters(agents)` in `render/particles.ts`.
+  - `SWAY_CHUNK_MARKER` and the uniforms `uWindDir`, `uWindStrength` and `uSwayTime`.
+  - `forceAlert(severity)` returns the vehicle id. `advanceWall` was dropped: the E2E toast tests use real time.
+- **Behaviour kept identical in Stage 3:**
+  - `VehicleClass` and `weatherModes` are widened, but the new classes have zero mix and zero stalls in `facility` until Stage 4 derives both from `config/fleet.ts`. The fleet, the lot and every seeded run are unchanged.
+  - The new classes render as sedans until their meshes exist.
+  - Fog and storm already carry their simulation factors (FE-6) and borrow overcast and rain lighting.
+- **Failing tests:**
+  - **Unit:** 141 failing in 24 files. New: fleet 5, maintenance 5, revenue 8, fleetMatch 4, world.m9 10, environment.m9 4, wind 4, lightning 9, particles 6, foliageSway 2, phases 2, cues 13, engine 7, toasts 10, m9.pure 10, m9 components 13, lint rule 1. Updated: vehicles 19, kpis 3, help 2, format 1, tables 1, LiveTable 1, publishing 1.
+  - **Soak:** 3 failing (the fleet-economics day runs).
+  - **E2E:** 7 failing in `tests/e2e/m9.spec.ts`.
+- **Tests that pass already**, because they pin facts that hold today:
+  - the fleet table data (6)
+  - fog and storm slowing traffic, and the six-mode weather menu (unit and E2E)
+  - fog and storm deep links
+  - the lint rule allowing `config/fleet.ts` (vacuous until the rule exists)
+  - alert kinds
+  - the KpiCards revenue rendering (KpiCards is generic)
+  - toasts hidden in embed, in kiosk and with the switch off (vacuous until toasts render)
+  - four `environment.m9` checks that are zero or false by default
+  - in the soak: fog meets the Balanced targets (turnaround ≤ 50) and storm meets the stress targets, on all 3 seeds, before any retune
+- **Existing suites:** the other 642 unit tests, 40 soak tests and 49 E2E tests (M1–M8 and the dev server) pass. Typecheck and lint are clean. The test bundle is 230.0 KB gzipped.
+- **Existing tests changed, each with a note in the file:**
+  - `TopBar` (6-mode menu; new props in setup)
+  - `kpis` (4 cards)
+  - `format` (stall labels by row; 7 class labels)
+  - `help` (`M`; version 0.9.0)
+  - `publishing` (CHANGELOG 0.9.0)
+  - `vehicles` (7 fleet kinds, silhouettes, pickup bed)
+  - `tables` and `LiveTable` (model and rate)
+  - the fixtures (`ratePerDay`, `milesToService`, `revenue`, `kind`), `m8` (Dashboard setup)
+  - `day.soak` (fog in Balanced, storm stress, economics)
+

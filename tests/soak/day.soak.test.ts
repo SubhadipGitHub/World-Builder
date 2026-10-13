@@ -9,7 +9,9 @@ import { createSim } from '../../src/sim/world';
 // evening peak (16–20), the night and the early morning.
 
 const SEEDS = [1, 2, 3];
-const BALANCED: readonly WeatherMode[] = ['clear', 'overcast', 'rain'];
+// M9 (§14.8): fog joins the Balanced set with a 50-minute turnaround target.
+const BALANCED: readonly WeatherMode[] = ['clear', 'overcast', 'fog', 'rain'];
+const TURNAROUND_TARGET: Readonly<Partial<Record<WeatherMode, number>>> = { clear: 45, overcast: 45, fog: 50, rain: 55 };
 const STEPS = Math.round(86_400 / (rates.stepWallSec * rates.timeScale));
 /** Hub hours 60 minutes after each peak ends (morning peak 10:00, evening peak 20:00). */
 const RECOVERY_HOURS = [11, 21];
@@ -21,6 +23,9 @@ interface Day {
   served: number;
   maxQueue: number;
   recovery: { hour: number; queue: number }[];
+  /** M9 (§14.8): maintenance flags ÷ inspections, and the revenue booked over the day. */
+  flagRate: number;
+  revenue: number;
 }
 
 function runDay(seed: number, mode: WeatherMode): Day {
@@ -33,6 +38,8 @@ function runDay(seed: number, mode: WeatherMode): Day {
   };
   const openAtStart = open();
   let checkouts = 0;
+  let flags = 0;
+  let inspections = 0;
   let tSum = 0;
   let tN = 0;
   let uSum = 0;
@@ -46,7 +53,11 @@ function runDay(seed: number, mode: WeatherMode): Day {
       const overlaps = findOverlaps(sim.footprints());
       if (overlaps.length > 0) throw new Error(`overlap at step ${String(i)}: ${JSON.stringify(overlaps)}`);
     }
-    for (const e of sim.drainEvents()) if (e.type === 'checkout') checkouts++;
+    for (const e of sim.drainEvents()) {
+      if (e.type === 'checkout') checkouts++;
+      else if (e.type === 'maintenanceFlagged') flags++;
+      else if (e.type === 'milestone' && e.stage === 'inspected') inspections++;
+    }
     const snap = sim.snapshot();
     const stuck = gridlock.update(
       snap.agents.map((a) => ({ id: a.id, speed: a.speed, parked: a.parked })),
@@ -71,7 +82,15 @@ function runDay(seed: number, mode: WeatherMode): Day {
   // Served = checkouts ÷ the pickups customers actually asked for during the day. Dividing by the
   // expected demand instead made the seeds' random arrival counts (±8%) look like service failures.
   const requests = checkouts + open() - openAtStart;
-  return { turnaround: tSum / Math.max(1, tN), utilisation: uSum / Math.max(1, uN), served: checkouts / Math.max(1, requests), maxQueue, recovery };
+  return {
+    turnaround: tSum / Math.max(1, tN),
+    utilisation: uSum / Math.max(1, uN),
+    served: checkouts / Math.max(1, requests),
+    maxQueue,
+    recovery,
+    flagRate: flags / Math.max(1, inspections),
+    revenue: sim.metrics().revenue.total,
+  };
 }
 
 describe('day-long calibration (§12.4, Balanced)', () => {
@@ -79,8 +98,8 @@ describe('day-long calibration (§12.4, Balanced)', () => {
     for (const mode of BALANCED) {
       it(`seed ${String(seed)}, ${mode}: meets the Balanced targets over a day`, () => {
         const d = runDay(seed, mode);
-        // D31: rain slows driving by 20%, so its turnaround target is 55 min.
-        expect(d.turnaround, 'average turnaround (min)').toBeLessThanOrEqual(mode === 'rain' ? 55 : 45);
+        // D31: rain slows driving by 20%, so its turnaround target is 55 min; M9: fog 50 min.
+        expect(d.turnaround, 'average turnaround (min)').toBeLessThanOrEqual(TURNAROUND_TARGET[mode] ?? 45);
         expect(d.utilisation, 'average utilisation').toBeGreaterThanOrEqual(0.6);
         // D37: 60–75%, room for the seed-to-seed spread in demand (was 60–70%).
         expect(d.utilisation, 'average utilisation').toBeLessThanOrEqual(0.75);
@@ -105,6 +124,30 @@ describe('heatwave stress case (§12.4, Q2)', () => {
       expect(d.served).toBeGreaterThanOrEqual(0.8);
       const evening = d.recovery.find((r) => r.hour === 21);
       expect(evening?.queue ?? Infinity).toBeLessThanOrEqual(10);
+    });
+  }
+});
+
+describe('thunderstorm stress case (M9, §14.8)', () => {
+  for (const seed of SEEDS) {
+    it(`seed ${String(seed)}, storm: no overlap or gridlock, ≥ 85% served, queues recover`, () => {
+      const d = runDay(seed, 'storm');
+      expect(d.served).toBeGreaterThanOrEqual(0.85);
+      const evening = d.recovery.find((r) => r.hour === 21);
+      expect(evening?.queue ?? Infinity).toBeLessThanOrEqual(10);
+    });
+  }
+});
+
+describe('fleet economics over a day (M9, FE-4, FE-5)', () => {
+  for (const seed of SEEDS) {
+    it(`seed ${String(seed)}, clear: 8–12% of inspections flag maintenance, and revenue is plausible`, () => {
+      const d = runDay(seed, 'clear');
+      expect(d.flagRate, 'maintenance flags per inspection').toBeGreaterThanOrEqual(0.08);
+      expect(d.flagRate, 'maintenance flags per inspection').toBeLessThanOrEqual(0.12);
+      // About 480 rentals at $42–$119 a day: a sanity band, not a target.
+      expect(d.revenue).toBeGreaterThanOrEqual(25_000);
+      expect(d.revenue).toBeLessThanOrEqual(40_000);
     });
   }
 });

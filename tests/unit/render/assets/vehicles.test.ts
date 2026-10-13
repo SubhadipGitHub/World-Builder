@@ -10,6 +10,11 @@ const HEIGHTS: Readonly<Record<VehicleAssetKind, readonly [number, number]>> = {
   sedan: [1.25, 1.7],
   suv: [1.6, 2.1],
   ev: [1.4, 1.8],
+  // M9 classes (FE-10).
+  economy: [1.25, 1.65],
+  luxury: [1.15, 1.55],
+  minivan: [1.75, 2.15],
+  pickup: [1.65, 2.1],
   shuttle: [2.6, 3.4],
   tow: [2.2, 3.0],
   van: [1.9, 2.6],
@@ -60,7 +65,7 @@ describe('vehicleAsset: parts (V-2, P2)', () => {
   }
 
   it('paints fleet bodies white so each car takes its own instance colour', () => {
-    for (const kind of ['sedan', 'suv', 'ev'] as const) {
+    for (const kind of ['economy', 'sedan', 'luxury', 'suv', 'minivan', 'pickup', 'ev'] as const) {
       for (const c of colours(vehicleAsset(kind, darkPalette).paint)) expect(c).toEqual([1, 1, 1]);
     }
   });
@@ -73,13 +78,35 @@ describe('vehicleAsset: parts (V-2, P2)', () => {
     expect(h('suv') - h('sedan')).toBeGreaterThanOrEqual(0.15);
     expect(Math.abs(h('ev') - h('sedan'))).toBeGreaterThanOrEqual(0.05);
   });
+
+  it('tells the M9 classes apart from above and from the side (FE-10)', () => {
+    const e = (k: VehicleAssetKind) => {
+      const a = vehicleAsset(k, darkPalette);
+      return extent(a.paint, a.trim, a.lamps).size;
+    };
+    // Minivan and pickup stand clearly taller than a sedan; the premium saloon sits lowest.
+    expect(e('minivan').y - e('sedan').y).toBeGreaterThanOrEqual(0.25);
+    expect(e('pickup').y - e('sedan').y).toBeGreaterThanOrEqual(0.2);
+    expect(e('luxury').y).toBeLessThanOrEqual(e('sedan').y);
+    // The economy hatch is the shortest car; the pickup the longest.
+    expect(e('economy').x).toBeLessThan(e('sedan').x - 0.4);
+    expect(e('pickup').x).toBeGreaterThan(e('suv').x);
+  });
+
+  it('gives the pickup an open bed: no paint above the bed sides behind the cab (FE-10)', () => {
+    const a = vehicleAsset('pickup', darkPalette);
+    const top = extent(a.paint).max.y;
+    const rear = positions(a.paint).filter((p) => p[0] < -0.25 * dimensions.pickup.length);
+    expect(rear.length).toBeGreaterThan(0);
+    for (const p of rear) expect(p[1]).toBeLessThan(0.75 * top);
+  });
 });
 
 describe('vehicleAsset: fleet livery (B-4, G11)', () => {
   const gold = rgb(brand.colors.accent);
   const isGold = (c: [number, number, number]): boolean => c.every((v, i) => Math.abs(v - (gold[i] ?? 0)) < 1e-3);
 
-  for (const kind of ['sedan', 'suv', 'ev'] as const) {
+  for (const kind of ['economy', 'sedan', 'luxury', 'suv', 'minivan', 'pickup', 'ev'] as const) {
     it(`${kind} carries a gold GoldLane stripe on both sides, in the untinted trim`, () => {
       const a = vehicleAsset(kind, darkPalette);
       const ps = positions(a.trim);

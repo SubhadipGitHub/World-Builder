@@ -49,6 +49,14 @@ export interface TopBarProps {
   readonly onStartTour: () => void;
   readonly onScreenshot: () => void;
   readonly onOpenHelp: () => void;
+  /** M9 (FE-18): speaker button (aria-pressed) next to the alerts; volume slider in the user menu (0–100). */
+  readonly sound: boolean;
+  readonly onSound: (on: boolean) => void;
+  readonly volume: number;
+  readonly onVolume: (volume: number) => void;
+  /** M9 (FE-20): role="switch" "Pop-up alerts" in the user menu. */
+  readonly toastsOn: boolean;
+  readonly onToasts: (on: boolean) => void;
 }
 
 const DAY_NIGHT: readonly { readonly value: DayNight; readonly label: string }[] = [

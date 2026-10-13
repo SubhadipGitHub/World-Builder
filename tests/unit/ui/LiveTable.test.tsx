@@ -11,7 +11,9 @@ const fleet: FleetRow[] = [
   { id: 'GL-PGW-00002', model: 'Mid-size sedan', status: 'Ready for rent', energy: 'Fuel 100%', location: 'Ready lot & exit gate' },
 ];
 const queue: QueueRow[] = [{ unitId: 'wash2', bay: 'Wash bay 2', vehicleId: 'GL-PGW-00001', service: 'Wash', remaining: '3 min' }];
-const checkouts: CheckoutRow[] = [{ agreementNo: 'RA-26-0012345', vehicleId: 'GL-PGW-00009', tier: 'Gold', gate: 'Exit gate 1', simTimeSec: 600 }];
+const checkouts: CheckoutRow[] = [
+  { agreementNo: 'RA-26-0012345', vehicleId: 'GL-PGW-00009', tier: 'Gold', gate: 'Exit gate 1', model: 'Crew-cab pickup', rate: '$84/day', simTimeSec: 600 },
+];
 
 function setup() {
   const onSelect = vi.fn();
@@ -53,7 +55,18 @@ describe('LiveTable (D-6)', () => {
     fireEvent.click(bodyRows()[0]!);
     expect(onSelect).toHaveBeenLastCalledWith('GL-PGW-00001');
     fireEvent.click(screen.getByRole('tab', { name: 'Customer checkout log' }));
-    expect(within(screen.getByRole('tabpanel')).getAllByRole('columnheader').map((h) => h.textContent)).toEqual(['Time', 'Agreement', 'Vehicle', 'Tier', 'Gate']);
+    // M9 (FE-9): Class and Rate columns added.
+    expect(within(screen.getByRole('tabpanel')).getAllByRole('columnheader').map((h) => h.textContent)).toEqual([
+      'Time',
+      'Agreement',
+      'Vehicle',
+      'Class',
+      'Rate',
+      'Tier',
+      'Gate',
+    ]);
+    expect(bodyRows()[0]?.textContent).toContain('Crew-cab pickup');
+    expect(bodyRows()[0]?.textContent).toContain('$84/day');
     expect(bodyRows()[0]?.textContent).toContain('T600');
     expect(bodyRows()[0]?.textContent).toContain('RA-26-0012345');
   });

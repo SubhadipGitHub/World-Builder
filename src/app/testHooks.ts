@@ -5,6 +5,9 @@ import type { AreaId } from '../layout/hub';
 import type { Environment } from '../render/environment';
 import type { Vec2 } from '../sim/types';
 import type { Theme } from '../ui/theme';
+import type { SoundEngineState } from '../audio/engine';
+import type { Wind } from '../render/wind';
+import type { RevenueView } from '../sim/revenue';
 
 /**
  * Test-only window.__hub, present only when built with VITE_TEST_HOOKS=1 (architecture §8).
@@ -70,6 +73,20 @@ export interface HubTestHooks {
   advanceKiosk(sec: number): void;
   /** True while the help dialog is open. */
   help(): boolean;
+  /** M9 (§22): the sound engine, or null before sound was first turned on (FE-18). */
+  audioState(): SoundEngineState | null;
+  /** Visible pop-up alerts, newest first, and how many more are waiting (FE-19). */
+  toasts(): { readonly visible: readonly { readonly id: string; readonly severity: string; readonly message: string; readonly count: number }[]; readonly overflow: number };
+  /** Revenue of the visible simulation (FE-5), including the running total. */
+  revenue(): RevenueView;
+  /** Wind applied this frame (FE-13). */
+  wind(): Wind;
+  /** Lightning since load: strike count, the last strike's schedule time, and the flash applied this frame (FE-12). */
+  lightning(): { readonly strikes: number; readonly lastStrikeT: number | null; readonly flash: number };
+  /** Live ambient particles (FE-14). */
+  particleCount(): number;
+  /** Raises a warning or critical maintenance alert for a fleet car on the map, as the simulation would; returns its id. */
+  forceAlert(severity: 'warning' | 'critical'): string;
 }
 
 declare global {

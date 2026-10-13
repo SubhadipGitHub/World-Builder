@@ -3,9 +3,10 @@ import { brand } from '../../config/brand';
 import { dimensions } from '../../config/facility';
 import { assemble, paint, place } from '../kit/assemble';
 import { cylinder, roundedBox, slab } from '../kit/shapes';
+import { notImplemented } from '../../shared/notImplemented';
 import type { Palette } from '../palette';
 
-export type VehicleAssetKind = 'sedan' | 'suv' | 'ev' | 'shuttle' | 'tow' | 'van' | 'cart';
+export type VehicleAssetKind = 'economy' | 'sedan' | 'luxury' | 'suv' | 'minivan' | 'pickup' | 'ev' | 'shuttle' | 'tow' | 'van' | 'cart';
 
 /**
  * Pixar-style vehicle, length along +x (front at +x), centred on its footprint, wheels on y = 0 (P2):
@@ -189,5 +190,11 @@ export function vehicleAsset(kind: VehicleAssetKind, palette: Palette): VehicleA
       return van(palette);
     case 'cart':
       return cart(palette);
+    // Stage 3 placeholders (M9, FE-10): economy and luxury via car(), minivan() and pickup() builders.
+    case 'economy':
+    case 'luxury':
+    case 'minivan':
+    case 'pickup':
+      return notImplemented(kind, palette);
   }
 }

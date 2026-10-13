@@ -58,6 +58,8 @@ describe('createCheckoutLog (D-6 Customer checkout log)', () => {
     agreementNo: `RA-26-000000${String(n)}`,
     tier: n % 2 ? 'Gold' : 'Platinum',
     gateId: 'gate1',
+    cls: 'sedan',
+    ratePerDay: 55,
     simTimeSec: n * 10,
   });
 
@@ -65,9 +67,10 @@ describe('createCheckoutLog (D-6 Customer checkout log)', () => {
     const log = createCheckoutLog(2);
     log.ingest([checkout(1), { type: 'towDispatched', vehicleId: 'x', towId: 't', simTimeSec: 0 }, checkout(2)]);
     log.ingest([checkout(3)]);
+    // M9 (FE-9): rows also carry the model and the booked rate.
     expect(log.rows()).toEqual([
-      { agreementNo: 'RA-26-0000003', vehicleId: 'GL-PGW-00003', tier: 'Gold', gate: 'Exit gate 1', simTimeSec: 30 },
-      { agreementNo: 'RA-26-0000002', vehicleId: 'GL-PGW-00002', tier: 'Platinum', gate: 'Exit gate 1', simTimeSec: 20 },
+      { agreementNo: 'RA-26-0000003', vehicleId: 'GL-PGW-00003', tier: 'Gold', gate: 'Exit gate 1', model: 'Mid-size sedan', rate: '$55/day', simTimeSec: 30 },
+      { agreementNo: 'RA-26-0000002', vehicleId: 'GL-PGW-00002', tier: 'Platinum', gate: 'Exit gate 1', model: 'Mid-size sedan', rate: '$55/day', simTimeSec: 20 },
     ]);
   });
 });

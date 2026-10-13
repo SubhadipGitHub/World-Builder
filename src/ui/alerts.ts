@@ -6,10 +6,14 @@ import { CREW_LABEL, LEVEL_LABEL } from './scenario';
 
 export type AlertSeverity = 'info' | 'warning' | 'critical';
 
+/** What raised the alert (M9, F20): the toast merge key and the chime choice. */
+export type AlertKind = 'maintenance' | 'service' | 'tow' | 'queue' | 'lowSoc' | 'scenario';
+
 export interface Alert {
   /** Unique, stable id. */
   readonly id: string;
   readonly severity: AlertSeverity;
+  readonly kind: AlertKind;
   readonly message: string;
   /** Vehicle to select when the alert is clicked, if any. */
   readonly vehicleId: string | null;
@@ -29,7 +33,8 @@ export interface Alert {
  *    reset "Scenario reset to normal"; rejected is not shown
  */
 export interface AlertFeed {
-  ingest(events: readonly SimEvent[]): void;
+  /** Returns the alerts this call created, oldest first (M9: fed to the toasts). */
+  ingest(events: readonly SimEvent[]): readonly Alert[];
   observeSnapshot(snapshot: Snapshot, socThresholdPct: number): void;
   list(): readonly Alert[];
   unread(): number;
@@ -71,8 +76,8 @@ export function createAlertFeed(max = 50): AlertFeed {
   let counter = 0;
   const lowEvs = new Set<string>();
 
-  const push = (severity: AlertSeverity, message: string, vehicleId: string | null, simTimeSec: number, unitId: string | null = null): void => {
-    alerts.unshift({ id: `alert-${String(++counter)}`, severity, message, vehicleId, unitId, simTimeSec });
+  const push = (severity: AlertSeverity, kind: AlertKind, message: string, vehicleId: string | null, simTimeSec: number, unitId: string | null = null): void => {
+    alerts.unshift({ id: `alert-${String(++counter)}`, severity, kind, message, vehicleId, unitId, simTimeSec });
     if (alerts.length > max) alerts = alerts.slice(0, max);
     unread++;
   };
@@ -82,31 +87,32 @@ export function createAlertFeed(max = 50): AlertFeed {
       for (const e of events) {
         switch (e.type) {
           case 'maintenanceFlagged':
-            if (e.severe) push('critical', `Severe damage on ${e.vehicleId} — tow requested`, e.vehicleId, e.simTimeSec);
-            else push('warning', `Maintenance: ${e.reason} on ${e.vehicleId}`, e.vehicleId, e.simTimeSec);
+            if (e.severe) push('critical', 'maintenance', `Severe damage on ${e.vehicleId} — tow requested`, e.vehicleId, e.simTimeSec);
+            else push('warning', 'maintenance', `Maintenance: ${e.reason} on ${e.vehicleId}`, e.vehicleId, e.simTimeSec);
             break;
           case 'towDispatched':
-            push('info', `Tow truck dispatched for ${e.vehicleId}`, e.vehicleId, e.simTimeSec);
+            push('info', 'tow', `Tow truck dispatched for ${e.vehicleId}`, e.vehicleId, e.simTimeSec);
             break;
           case 'queueOverflow':
-            push('warning', `${STATIONS[e.resource] ?? e.resource} queue at ${String(e.length)} cars`, null, e.simTimeSec);
+            push('warning', 'queue', `${STATIONS[e.resource] ?? e.resource} queue at ${String(e.length)} cars`, null, e.simTimeSec);
             break;
           case 'scenario': {
             const message = scenarioMessage(e);
-            if (message) push('info', message, null, e.simTimeSec, e.unitId ?? null);
+            if (message) push('info', 'scenario', message, null, e.simTimeSec, e.unitId ?? null);
             break;
           }
           default:
             break;
         }
       }
+      return []; // Stage 3 placeholder (M9): Stage 4 returns the alerts created by this call.
     },
     observeSnapshot(snapshot, threshold) {
       const lowNow = new Set<string>();
       for (const a of snapshot.agents) {
         if (a.kind !== 'fleet' || a.cls !== 'ev' || a.state !== 'staged' || a.socPct === null || a.socPct >= threshold) continue;
         lowNow.add(a.id);
-        if (!lowEvs.has(a.id)) push('warning', `${a.id} staged at ${String(Math.round(a.socPct))}% charge`, a.id, snapshot.simTimeSec);
+        if (!lowEvs.has(a.id)) push('warning', 'lowSoc', `${a.id} staged at ${String(Math.round(a.socPct))}% charge`, a.id, snapshot.simTimeSec);
       }
       lowEvs.clear();
       for (const id of lowNow) lowEvs.add(id);

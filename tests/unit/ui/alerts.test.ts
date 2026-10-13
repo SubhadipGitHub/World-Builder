@@ -3,7 +3,7 @@ import type { SimEvent } from '../../../src/sim/events';
 import { createAlertFeed } from '../../../src/ui/alerts';
 import { agent, snapshot } from './fixtures';
 
-const flagged = (vehicleId: string, severe: boolean, t: number): SimEvent => ({ type: 'maintenanceFlagged', vehicleId, reason: 'tyres', severe, simTimeSec: t });
+const flagged = (vehicleId: string, severe: boolean, t: number): SimEvent => ({ type: 'maintenanceFlagged', vehicleId, cls: 'sedan', reason: 'tyres', severe, simTimeSec: t });
 
 describe('createAlertFeed (D-8)', () => {
   it('turns events into alerts with the right severity and wording', () => {

@@ -412,7 +412,15 @@ export const hub: HubLayout = {
   serviceLoop,
   walkway: {
     doorEdge,
-    routes: { ev: [doorEdge], suv: [doorEdge, walk1], sedan: [doorEdge, walk1, walk2] },
+    routes: {
+      ev: [doorEdge],
+      suv: [doorEdge, walk1],
+      minivan: [doorEdge, walk1],
+      pickup: [doorEdge, walk1],
+      sedan: [doorEdge, walk1, walk2],
+      economy: [doorEdge, walk1, walk2],
+      luxury: [doorEdge, walk1, walk2],
+    },
   },
   buildings: [
     { id: 'terminal', label: 'Terminal & GoldLane Express counter', x: -65, z: 122, width: 50, depth: 55, height: 12 },

@@ -1,4 +1,5 @@
 import type { WeatherMode } from '../config/weather';
+import type { Wind } from './wind';
 
 export type DayNight = 'auto' | 'day' | 'night';
 
@@ -19,12 +20,28 @@ export interface Environment {
   readonly heat: boolean;
   /** Heat shimmer on: heatwave, motion allowed and quality tier permits it. */
   readonly shimmer: boolean;
+  /** Fog weather (FE-11): dense fog, lamp halos. */
+  readonly fog: boolean;
+  /** Thunderstorm (FE-12): rain plus lightning and strong wind. */
+  readonly storm: boolean;
+  /** Morning ground mist, 0–1 (FE-11; clear and overcast only). */
+  readonly mist: number;
+  /** Wind for sway, flags, rain slant, clouds and the windsock (FE-13). */
+  readonly wind: Wind;
+  /** Lightning flash added to the scene light, 0–1, already capped (FE-12, F12). */
+  readonly flash: number;
+  /** Headlights and runway lights on in daytime (fog). */
+  readonly headlightsByDay: boolean;
 }
 
 export interface EnvironmentOptions {
   readonly reducedMotion: boolean;
   /** 0 best … 2 lowest (render/quality). Shimmer needs tier 0. */
   readonly qualityTier: number;
+  /** Wall-clock seconds for wind gusts (FE-13); 0 when omitted. */
+  readonly tSec?: number;
+  /** Lightning flash level from render/lightning `flashLevel` (FE-12); 0 when omitted. */
+  readonly flash?: number;
 }
 
 const SUNRISE = 6;
@@ -45,7 +62,10 @@ interface WeatherLight {
 const WEATHER_LIGHT: Readonly<Record<WeatherMode, WeatherLight>> = {
   clear: { sun: 1, ambient: 1, fog: 0 },
   overcast: { sun: 0.45, ambient: 1.1, fog: 0.0007 },
+  // Stage 3 (M9): fog and storm borrow overcast and rain lighting until Stage 4 tunes them (FE-11, FE-12).
+  fog: { sun: 0.45, ambient: 1.1, fog: 0.0007 },
   rain: { sun: 0.3, ambient: 0.9, fog: 0.0015 },
+  storm: { sun: 0.3, ambient: 0.9, fog: 0.0015 },
   heatwave: { sun: 1.25, ambient: 1, fog: 0.0004 },
 };
 
@@ -73,5 +93,12 @@ export function environmentFor(weather: WeatherMode, clockHours: number, dayNigh
     rain: weather === 'rain',
     heat,
     shimmer: heat && !options.reducedMotion && options.qualityTier === 0,
+    // Stage 3 placeholders (M9, FE-11…FE-13).
+    fog: false,
+    storm: false,
+    mist: 0,
+    wind: { dirRad: 0, strength: 0, gust: 0 },
+    flash: 0,
+    headlightsByDay: false,
   };
 }

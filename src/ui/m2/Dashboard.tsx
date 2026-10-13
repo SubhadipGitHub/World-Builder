@@ -35,6 +35,7 @@ import { HelpDialog } from '../m8/HelpDialog';
 import { KioskCaption } from '../m8/KioskCaption';
 import { Notice } from '../m8/Notice';
 import type { ShareActions, ShareState } from '../m8/types';
+import type { Toast } from '../toasts';
 
 /** Everything the panels show, refreshed by the render loop (architecture §15.1). */
 export interface DashboardData {
@@ -55,6 +56,9 @@ export interface DashboardData {
   readonly compactLabels: boolean;
   /** Airport name labels (L-1). */
   readonly places: readonly PlaceLabel[];
+  /** M9 pop-up alerts (FE-19): visible toasts, newest first, and how many more are waiting. */
+  readonly toasts: readonly Toast[];
+  readonly toastOverflow: number;
 }
 
 export interface TableData {
@@ -69,6 +73,22 @@ export interface Settings {
   readonly theme: Theme;
   readonly speed: Speed;
   readonly labels: boolean;
+  /** M9 (FE-18, FE-20): sound on, master volume 0–100, pop-up alerts on. */
+  readonly sound: boolean;
+  readonly volume: number;
+  readonly toasts: boolean;
+}
+
+/** M9 sound and pop-up alert wiring (FE-18…FE-20). */
+export interface AudioActions {
+  readonly onSound: (on: boolean) => void;
+  readonly onVolume: (volume: number) => void;
+  readonly onToasts: (on: boolean) => void;
+  /** Selects the toast's vehicle or unit and marks its alert read. */
+  readonly onToast: (toast: Toast) => void;
+  readonly onDismissToast: (id: string) => void;
+  /** Pointer over or focus inside a toast (pauses its timer). */
+  readonly onHoldToast: (id: string, on: boolean) => void;
 }
 
 export interface DashboardProps {
@@ -97,6 +117,7 @@ export interface DashboardProps {
   /** M8 (§21 J5): display mode, kiosk caption, notices and dialogs. */
   readonly share: Signal<ShareState>;
   readonly shareActions: ShareActions;
+  readonly audio: AudioActions;
 }
 
 /** What-if wiring (§9): levers go to the visible simulation only; speed to both (W7–W9). */
@@ -175,6 +196,12 @@ export function Dashboard(props: DashboardProps): JSX.Element {
             onStartTour={actions.onStartTour}
             onScreenshot={actions.onScreenshot}
             onOpenHelp={actions.onOpenHelp}
+            sound={settings.sound}
+            onSound={props.audio.onSound}
+            volume={settings.volume}
+            onVolume={props.audio.onVolume}
+            toastsOn={settings.toasts}
+            onToasts={props.audio.onToasts}
           />
           <KpiCards cards={data.cards} deltas={data.deltas} />
           {data.snapshot ? (

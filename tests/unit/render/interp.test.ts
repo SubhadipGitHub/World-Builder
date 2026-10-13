@@ -20,6 +20,8 @@ const agent = (id: string, x: number, z: number, heading = 0): AgentView => ({
   fuelPct: 90,
   socPct: null,
   odometerMi: 12_000,
+  ratePerDay: 55,
+  milesToService: 3_000,
   task: '',
   etaSimSec: null,
   parentId: null,

@@ -1,7 +1,7 @@
 import { trend, type Trend } from '../sim/metrics';
 import type { Metrics } from '../sim/world';
 
-export type KpiId = 'turnaround' | 'utilisation' | 'evSoc';
+export type KpiId = 'turnaround' | 'utilisation' | 'evSoc' | 'revenue';
 
 export interface KpiCard {
   readonly id: KpiId;

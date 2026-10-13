@@ -9,8 +9,8 @@ import { agent, snapshot } from './fixtures';
 afterEach(cleanup);
 
 const alerts: Alert[] = [
-  { id: 'a2', severity: 'critical', message: 'Severe damage on GL-PGW-00002 — tow requested', vehicleId: 'GL-PGW-00002', unitId: null, simTimeSec: 20 },
-  { id: 'a1', severity: 'warning', message: 'Wash queue at 7 cars', vehicleId: null, unitId: null, simTimeSec: 10 },
+  { id: 'a2', severity: 'critical', kind: 'maintenance', message: 'Severe damage on GL-PGW-00002 — tow requested', vehicleId: 'GL-PGW-00002', unitId: null, simTimeSec: 20 },
+  { id: 'a1', severity: 'warning', kind: 'queue', message: 'Wash queue at 7 cars', vehicleId: null, unitId: null, simTimeSec: 10 },
 ];
 
 function setup(overrides: Partial<TopBarProps> = {}) {
@@ -42,6 +42,12 @@ function setup(overrides: Partial<TopBarProps> = {}) {
     onStartTour: vi.fn(),
     onScreenshot: vi.fn(),
     onOpenHelp: vi.fn(),
+    sound: false,
+    onSound: vi.fn(),
+    volume: 60,
+    onVolume: vi.fn(),
+    toastsOn: true,
+    onToasts: vi.fn(),
     ...overrides,
   };
   render(<TopBar {...props} />);
@@ -71,11 +77,19 @@ describe('TopBar (D-2)', () => {
     expect(props.onPick).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'resource', id: 'wash1' }));
   });
 
-  it('changes the weather (X-1)', () => {
+  it('changes the weather (X-1, FE-6)', () => {
     const props = setup();
     const select = screen.getByRole('combobox', { name: 'Weather' });
     expect((select as HTMLSelectElement).value).toBe('clear');
-    expect(within(select).getAllByRole('option').map((o) => o.textContent)).toEqual(['Clear / sunny', 'Heavy rain / slick', 'Overcast', 'Heatwave / high demand']);
+    // M9 (FE-6): six modes, ordered by severity (was four).
+    expect(within(select).getAllByRole('option').map((o) => o.textContent)).toEqual([
+      'Clear / sunny',
+      'Overcast',
+      'Fog',
+      'Heavy rain / slick',
+      'Thunderstorm',
+      'Heatwave / high demand',
+    ]);
     fireEvent.change(select, { target: { value: 'rain' } });
     expect(props.onWeather).toHaveBeenCalledWith('rain');
   });

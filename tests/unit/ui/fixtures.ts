@@ -19,6 +19,8 @@ export const agent = (overrides: Partial<AgentView> = {}): AgentView => ({
   fuelPct: null,
   socPct: 64.2,
   odometerMi: 12_345,
+  ratePerDay: 68,
+  milesToService: 4_200,
   task: 'Washing at wash2',
   etaSimSec: 190,
   parentId: null,
@@ -64,5 +66,6 @@ export const metrics = (overrides: Partial<Metrics> = {}): Metrics => ({
   readyEvSocPct: 86.2,
   counts: { total: 120, onRent: 78, ready: 18, inTurnaround: 24 },
   stageCounts: { returned: 3, inspected: 5, washed: 4, energised: 6, staged: 18, dispatched: 0 },
+  revenue: { today: 18_420, total: 18_420, rentalsToday: 260, atRisk: 1_240, atRiskCount: 18 },
   ...overrides,
 });

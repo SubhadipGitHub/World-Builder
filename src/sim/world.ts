@@ -12,6 +12,7 @@ import type { Footprint } from './invariants';
 import { isParkedState, milestoneFor, TRACKER_STAGES, type TrackerStage, type VehicleState } from './lifecycle';
 import { averageReadyEvSoc, averageTurnaroundMin, utilisation, type TurnaroundRecord } from './metrics';
 import { createResourcePool, type ResourcePool } from './resources';
+import { EMPTY_REVENUE, type RevenueView } from './revenue';
 import { createRng } from './rng';
 import {
   NORMAL_SCENARIO,
@@ -64,6 +65,10 @@ export interface AgentView {
   readonly fuelPct: number | null;
   readonly socPct: number | null;
   readonly odometerMi: number | null;
+  /** Booked-class daily rate in US$ while the car is matched, else its own class's rate; null for non-fleet (FE-9). */
+  readonly ratePerDay: number | null;
+  /** Miles until the next scheduled service, ≥ 0; null for non-fleet (FE-4, FE-9). */
+  readonly milesToService: number | null;
   readonly task: string;
   readonly etaSimSec: number | null;
   readonly parentId: string | null;
@@ -111,6 +116,8 @@ export interface Metrics {
   };
   /** Vehicles currently at each tracker stage (D-5, nothing selected). */
   readonly stageCounts: Readonly<Record<TrackerStage, number>>;
+  /** Revenue and the at-risk counter backlog (FE-5, D50). */
+  readonly revenue: RevenueView;
 }
 
 export type Command =
@@ -140,7 +147,7 @@ const AGREEMENT_YEAR = 2026;
 const TURNAROUND_WINDOW_SEC = 2 * 3600;
 const QUEUE_OVERFLOW = 6;
 const SLOT_FALLBACK_SEC = 120;
-const INITIAL_STAGED: Readonly<Record<VehicleClass, number>> = { sedan: 8, suv: 6, ev: 8 };
+const INITIAL_STAGED: Readonly<Record<VehicleClass, number>> = { economy: 0, sedan: 8, luxury: 0, suv: 6, minivan: 0, pickup: 0, ev: 8 };
 /** Checkout dwell at the exit gate (R-2; 10–20 s before M7). */
 const GATE_DWELL = { min: 8, max: 15 } as const;
 /** D36: a stopped car (≤ this speed, m/s) within NOSE_TO_TAIL_GAP metres of a queued car ahead counts as queued. */
@@ -400,6 +407,10 @@ export function createSim(config: SimConfig): Sim {
     ev: Math.round(facility.fleetSize * facility.fleetMix.ev),
     suv: Math.round(facility.fleetSize * facility.fleetMix.suv),
     sedan: 0,
+    economy: 0,
+    luxury: 0,
+    minivan: 0,
+    pickup: 0,
   };
   counts.sedan = facility.fleetSize - counts.ev - counts.suv;
   const classes: VehicleClass[] = [];
@@ -409,7 +420,7 @@ export function createSim(config: SimConfig): Sim {
     [classes[i], classes[j]] = [classes[j] as VehicleClass, classes[i] as VehicleClass];
   }
 
-  const staged: Record<VehicleClass, number> = { sedan: 0, suv: 0, ev: 0 };
+  const staged: Record<VehicleClass, number> = { economy: 0, sedan: 0, luxury: 0, suv: 0, minivan: 0, pickup: 0, ev: 0 };
   for (const cls of classes) {
     const v: Vehicle = {
       id: gen.vehicleId(),
@@ -607,7 +618,7 @@ export function createSim(config: SimConfig): Sim {
         v.maintenance = rng.chance(r.maintenanceChance);
         v.severe = v.maintenance && rng.chance(r.severeChance);
         if (v.maintenance) {
-          emit({ type: 'maintenanceFlagged', vehicleId: v.id, reason: rng.pick(['tyres', 'oil', 'damage'] as const), severe: v.severe, simTimeSec: now });
+          emit({ type: 'maintenanceFlagged', vehicleId: v.id, cls: v.cls, reason: rng.pick(['tyres', 'oil', 'damage'] as const), severe: v.severe, simTimeSec: now });
         }
         if (v.severe) {
           transition(v, 'awaitingTow');
@@ -661,6 +672,8 @@ export function createSim(config: SimConfig): Sim {
           agreementNo: v.agreementNo ?? gen.agreementNo(AGREEMENT_YEAR),
           tier: v.tier ?? gen.tier(),
           gateId: unitId,
+          cls: v.cls,
+          ratePerDay: 0, // Stage 3 placeholder (FE-5)
           simTimeSec: now,
         });
         leaveUnit(v, station, unitId);
@@ -1063,6 +1076,8 @@ export function createSim(config: SimConfig): Sim {
       fuelPct: v.fuelPct,
       socPct: v.socPct,
       odometerMi: v.odometerMi,
+      ratePerDay: null, // Stage 3 placeholder (FE-9)
+      milesToService: null, // Stage 3 placeholder (FE-4)
       task,
       etaSimSec: eta,
       parentId,
@@ -1101,6 +1116,8 @@ export function createSim(config: SimConfig): Sim {
       fuelPct: null,
       socPct: null,
       odometerMi: null,
+      ratePerDay: null,
+      milesToService: null,
       task,
       etaSimSec: null,
       parentId: null,
@@ -1167,6 +1184,7 @@ export function createSim(config: SimConfig): Sim {
         readyEvSocPct: averageReadyEvSoc(fleetOnMap.map((v) => ({ cls: v.cls, state: v.state, socPct: v.socPct }))),
         counts: { total: facility.fleetSize, onRent: rent.size, ready, inTurnaround: fleetOnMap.length - ready - departing },
         stageCounts,
+        revenue: EMPTY_REVENUE, // Stage 3 placeholder (FE-5)
       };
     },
     apply(command) {

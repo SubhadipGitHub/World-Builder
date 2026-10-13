@@ -51,6 +51,10 @@ describe('labels', () => {
     expect(classLabel('ev')).toBe('Compact EV crossover');
     expect(classLabel('suv')).toBe('Full-size SUV');
     expect(classLabel('sedan')).toBe('Mid-size sedan');
+    expect(classLabel('economy')).toBe('Economy hatchback');
+    expect(classLabel('luxury')).toBe('Premium saloon');
+    expect(classLabel('minivan')).toBe('7-seat minivan');
+    expect(classLabel('pickup')).toBe('Crew-cab pickup');
     expect(kindLabel('tow')).toBe('Tow truck');
     expect(kindLabel('shuttle')).toBe('Shuttle bus');
     expect(kindLabel('cart')).toBe('Technician cart');
@@ -66,8 +70,10 @@ describe('labels', () => {
     expect(unitLabel('charger3')).toBe('EV charger 3');
     expect(unitLabel('pump4')).toBe('Fuel pump 4');
     expect(unitLabel('gate1')).toBe('Exit gate 1');
-    expect(unitLabel('ev-04')).toBe('Ready slot EV-04');
-    expect(unitLabel('sedan-12')).toBe('Ready slot SEDAN-12');
+    // M9 (FE-3): stalls are named by row (was 'Ready slot EV-04', 'Ready slot SEDAN-12').
+    expect(unitLabel('ev-04')).toBe('EV row · stall 4');
+    expect(unitLabel('cars-12')).toBe('Cars row · stall 12');
+    expect(unitLabel('large-01')).toBe('SUVs & vans row · stall 1');
     expect(unitLabel('towbay1')).toBe('Tow bay');
     expect(unitLabel('mystery')).toBe('mystery');
   });

@@ -1,3 +1,4 @@
+import { notImplemented } from '../shared/notImplemented';
 import type { TrackerStage, VehicleState } from '../sim/lifecycle';
 import type { AgentKind, VehicleClass } from '../sim/types';
 
@@ -70,7 +71,15 @@ export function stageLabel(stage: TrackerStage): string {
   return STAGES[stage];
 }
 
-const CLASSES: Readonly<Record<VehicleClass, string>> = { ev: 'Compact EV crossover', suv: 'Full-size SUV', sedan: 'Mid-size sedan' };
+const CLASSES: Readonly<Record<VehicleClass, string>> = {
+  ev: 'Compact EV crossover',
+  suv: 'Full-size SUV',
+  sedan: 'Mid-size sedan',
+  economy: 'Economy hatchback',
+  luxury: 'Premium saloon',
+  minivan: '7-seat minivan',
+  pickup: 'Crew-cab pickup',
+};
 
 /** Brand-neutral model names (N-7), e.g. 'ev' → "Compact EV crossover". */
 export function classLabel(cls: VehicleClass): string {
@@ -110,4 +119,14 @@ export function unitLabel(unitId: string): string {
   const slot = /^(ev|suv|sedan)-(\d+)$/.exec(unitId);
   if (slot?.[1] && slot[2]) return `Ready slot ${slot[1].toUpperCase()}-${slot[2]}`;
   return unitId;
+}
+
+/** US$ with thousands separators and no cents (FE-8), e.g. 18420 → "$18,420". */
+export function formatMoney(usd: number): string {
+  return notImplemented(usd);
+}
+
+/** Short signed US$ for deltas (FE-8), e.g. −2140 → "−$2.1k", 640 → "+$640". */
+export function formatMoneyShort(usd: number): string {
+  return notImplemented(usd);
 }

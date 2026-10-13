@@ -3,5 +3,5 @@ export interface Vec2 {
   readonly z: number;
 }
 
-export type VehicleClass = 'sedan' | 'suv' | 'ev';
+export type VehicleClass = 'economy' | 'sedan' | 'luxury' | 'suv' | 'minivan' | 'pickup' | 'ev';
 export type AgentKind = 'fleet' | 'shuttle' | 'cart' | 'tow' | 'van' | 'pedestrian';
