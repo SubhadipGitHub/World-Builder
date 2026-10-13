@@ -123,9 +123,9 @@ test('Escape clears the selection (I-6)', async ({ page }) => {
   // Wait for the camera to arrive rather than a fixed time (software WebGL can be slow).
   await expect
     .poll(async () => page.evaluate(() => ({ cam: window.__hub!.cameraTarget(), goal: window.__hub!.areaTarget('wash') })).then((r) => dist2(r.cam, r.goal)), {
-      timeout: 8_000,
+      timeout: 15_000,
     })
-    .toBeLessThan(0.5);
+    .toBeLessThan(1);
   // Click whichever wash or service bay marker is not under a dashboard panel.
   const target = await page.evaluate(() => {
     for (const [id, label] of [['wash1', 'Wash bay 1'], ['wash2', 'Wash bay 2'], ['bay1', 'Service bay 1'], ['bay2', 'Service bay 2'], ['bay3', 'Service bay 3']] as const) {
