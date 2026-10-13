@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dimensions, facility } from '../../../src/config/facility';
+import { dimensions, facility, maxFleetLength } from '../../../src/config/facility';
 import { hub, hubGraph, type StationId } from '../../../src/layout/hub';
 import type { LaneGraph } from '../../../src/sim/graph/laneGraph';
 
@@ -22,7 +22,6 @@ function parkedClearOfZones(edgeId: string, length: number): boolean {
   return graph.zonesOn(edgeId).every(({ interval }) => interval.sExit <= len - length - 0.1);
 }
 
-const maxFleetLength = Math.max(dimensions.sedan.length, dimensions.suv.length, dimensions.ev.length);
 
 describe('hub layout: capacities (W-5)', () => {
   it('has the configured number of units per station', () => {
@@ -35,10 +34,11 @@ describe('hub layout: capacities (W-5)', () => {
     expect(units('towBay')).toHaveLength(1);
   });
 
-  it('splits Ready-lot slots into class rows', () => {
+  // M9 (FE-3): rows are Cars, SUVs & vans and EV (were Sedan, SUV, EV); maxFleetLength now covers all 7 classes.
+  it('splits Ready-lot slots into rows', () => {
     const slots = units('slot');
-    for (const cls of ['sedan', 'suv', 'ev'] as const) {
-      expect(slots.filter((u) => u.tag === cls)).toHaveLength(facility.readySlots[cls]);
+    for (const row of ['cars', 'large', 'ev'] as const) {
+      expect(slots.filter((u) => u.tag === row)).toHaveLength(facility.readySlots[row]);
     }
   });
 
@@ -109,8 +109,8 @@ describe('hub layout: tow, shuttle, service loop and walkway', () => {
   });
 
   it('has chained walkway routes from the terminal door to each row', () => {
-    for (const cls of ['sedan', 'suv', 'ev'] as const) {
-      const route = hub.walkway.routes[cls];
+    for (const row of ['cars', 'large', 'ev'] as const) {
+      const route = hub.walkway.routes[row];
       expect(route[0]).toBe(hub.walkway.doorEdge);
       expect(chained(route)).toBe(true);
     }

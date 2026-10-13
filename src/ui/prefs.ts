@@ -1,4 +1,3 @@
-import { notImplemented } from '../shared/notImplemented';
 import type { ThemeStorage } from './theme';
 
 // Remembered on/off settings (architecture §18, G9), like the theme (X-4).
@@ -31,10 +30,21 @@ export function saveFlag(storage: ThemeStorage | null, key: string, value: boole
 
 /** A saved whole number clamped to [min, max], or `fallback` if none, invalid, or storage throws. Never throws. */
 export function loadNumber(storage: ThemeStorage | null, key: string, fallback: number, min: number, max: number): number {
-  return notImplemented(storage, key, fallback, min, max);
+  try {
+    const raw = storage?.getItem(key);
+    if (raw === null || raw === undefined || raw.trim() === '') return fallback;
+    const n = Number(raw);
+    return Number.isFinite(n) ? Math.min(max, Math.max(min, Math.round(n))) : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 /** Saves a number; failures are ignored. Never throws. */
 export function saveNumber(storage: ThemeStorage | null, key: string, value: number): void {
-  notImplemented(storage, key, value);
+  try {
+    storage?.setItem(key, String(Math.round(value)));
+  } catch {
+    // Private mode or blocked storage: the choice simply isn't remembered.
+  }
 }

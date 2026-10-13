@@ -1,6 +1,7 @@
+import { FLEET_CLASSES, energyOf } from '../../config/fleet';
 import { Fragment, type JSX } from 'preact';
 import type { AgentView, ResourceView, Snapshot } from '../../sim/world';
-import { classLabel, formatDuration, formatMiles, formatPercent, formatSpeed, kindLabel, stageLabel, stateLabel, unitLabel } from '../format';
+import { classLabel, formatDuration, formatMiles, formatPercent, formatRate, formatSpeed, kindLabel, stageLabel, stateLabel, unitLabel } from '../format';
 import type { Selection } from '../store';
 import type { ThroughputTracker } from '../throughput';
 
@@ -37,7 +38,9 @@ function agentContent(a: AgentView): Content {
   if (a.kind !== 'fleet' || a.cls === null) {
     return { title: kindLabel(a.kind), rows: [['Task', a.task], ['Speed', formatSpeed(a.speed)]] };
   }
-  const energy: Row = a.cls === 'ev' ? ['Battery', formatPercent(a.socPct)] : ['Fuel', formatPercent(a.fuelPct)];
+  const energy: Row = energyOf(a.cls) === 'electric' ? ['Battery', formatPercent(a.socPct)] : ['Fuel', formatPercent(a.fuelPct)];
+  const interval = formatMiles(FLEET_CLASSES[a.cls].serviceIntervalMi);
+  const service = a.milesToService === null ? '—' : a.milesToService <= 0 ? `Due now (every ${interval})` : `in ${formatMiles(a.milesToService)} (every ${interval})`;
   return {
     title: a.id,
     rows: [
@@ -47,6 +50,8 @@ function agentContent(a: AgentView): Content {
       ['Stage', a.stage ? stageLabel(a.stage) : '—'],
       energy,
       ['Odometer', formatMiles(a.odometerMi)],
+      ['Rate', a.ratePerDay === null ? '—' : formatRate(a.ratePerDay)],
+      ['Next service', service],
       ['Task', a.task],
       ['ETA', formatDuration(a.etaSimSec)],
     ],
@@ -81,7 +86,7 @@ function resourceContent(id: string, r: ResourceView | undefined, throughput: Th
 /**
  * Minimal M1 detail panel (I-4); restyled as glass in M2 (D-4).
  * Renders nothing without a selection. Landmark: role="region", aria-label="Details".
- *  - Fleet vehicle: ID heading; Model, Plate, Status, Stage, Battery or Fuel, Odometer, Task, ETA.
+ *  - Fleet vehicle: ID heading; Model, Plate, Status, Stage, Battery or Fuel, Odometer, Rate, Next service (M9), Task, ETA.
  *  - Other agents: kind label heading; Task, Speed.
  *  - Bay / charger / kiosk / slot: unit label heading; Occupant ("Idle"), Progress, Queue, Throughput ("n / h").
  *  - Gate: unit label heading; Occupant, Last exit, Exits per hour.

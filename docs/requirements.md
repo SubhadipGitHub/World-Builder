@@ -32,7 +32,7 @@
 | D22–D25 | M6 airport (2026-10-12) | Mid-size airport, a movement about every 40 s, name labels, three fictional airlines (§11.1). |
 | D26–D39 | M7 ops realism (2026-10-13) | Faster gate cycle, an airport day demand curve, flights following the curve, Balanced targets, then the Stage 4 calibration decisions (§12.1). |
 | D40–D47 | M8 ship & share (2026-10-13) | GitHub Pages, Releases and an embed mode; full deep links; kiosk tour; screenshots; README, help overlay and changelog (§13.1). |
-| D48–D55 | M9 fleet economics, sound, weather FX & notifications (2026-10-13) | 7 rental classes with rates and service intervals, a revenue KPI, fog/storm/wind/particles, a procedural soundscape (muted by default) and alert toasts (§14.1). |
+| D48–D60 | M9 fleet economics, sound, weather FX & notifications (2026-10-13) | 7 rental classes with rates and service intervals, a revenue KPI, fog/storm/wind/particles, a procedural soundscape (muted by default) and alert toasts; D56–D60 are the Stage 4 calibration (§14.1). |
 
 > Note on D2: the pack loads Three.js "from a CDN". We bundle it inline instead. The result is still one HTML file and it works offline.
 
@@ -768,7 +768,12 @@ Goal: the hub earns money, sounds alive and tells you when something needs atten
 | D52 | Environment (2026-10-13) | **All four:** fog and morning mist, thunderstorm and lightning, wind and foliage, and ambient particles. |
 | D53 | Sound (2026-10-13) | **Procedural Web Audio, muted by default.** A speaker toggle in the top bar, remembered per browser. |
 | D54 | Notifications (2026-10-13) | **In-app toasts** for warning and critical alerts. No OS notifications. |
-| D55 | Proposed defaults (2026-10-13) | **Fog and Thunderstorm are new weather modes** (6 in all). The rates, intervals and mix are as in FE-2, and the fleet mix keeps the row shares at 40/25/35. All values are configurable. **To be confirmed with this doc.** |
+| D55 | Proposed defaults (2026-10-13) | **Fog and Thunderstorm are new weather modes** (6 in all). The rates, intervals and mix are as in FE-2, and the fleet mix keeps the row shares at 40/25/35. All values are configurable. Approved with this doc. |
+| D56 | Fleet footprints (Stage 4 calibration, 2026-10-13; **to confirm**) | **Every class stays within the 4.75–5.3 m footprint the layout was proven with.** The economy hatch becomes 4.75 m (was 4.1) and the pickup 5.3 m (was 5.8). Measured: with a 4.1 m (or 4.35 m) economy car, cars stopped in gaps on the service-exit and energy merges and the pump queue jammed (served 56% on one seed); with the 5.8 m pickup the tow truck's carry grew to 13.3 m and it waited at the same merge. The models keep their character through shape (tall two-box hatch; crew cab with an open bed). |
+| D57 | Maintenance rates (Stage 4 calibration, 2026-10-13) | **Random wear and damage 6% of inspections** (was 10%; FE-4 proposed about 4%) and **severe 3% of those** (was 2%), so tows stay about as frequent as in M7. Measured: scheduled service flags 3–5% of inspections over a day. |
+| D58 | Gridlock check (Stage 4, 2026-10-13) | **D36 extends to the tow truck:** it is waiting while heading for the service queue (as a fleet car heading for a queue is) or stopped behind a queued car, and the car it carries waits with it. Found by the soak: the tow waited over 10 minutes at the wash-exit merge for room in a full service queue. A real deadlock still shows at the head of the line. |
+| D59 | Soak targets (Stage 4 calibration, 2026-10-13; approved) | **Rain utilisation ≥ 58%** (≥ 60% elsewhere, D37; rain slows driving by 20%). **The maintenance flag rate is checked over the three seeds pooled** (about 1,450 inspections, ±0.8 pt of noise, rather than ±1.3 pt for one day). Measured misses before the change: 58.5% and 7.9%. |
+| D60 | Fog speed (Stage 4 calibration, 2026-10-13; approved) | **Fog slows vehicles by 10%** (FE-6 proposed 15%), between overcast and rain. At −15% the wash backed up past the morning peak (17 cars at 10:25, still 15 at 11:00) and one seed's turnaround was 54 min; at −10% every original Balanced target holds on all three seeds (queues ≤ 11, ≤ 7 an hour after the peak, turnaround 43–47 min). |
 
 ### 14.2 Fleet and economics (simulation)
 - **FE-1 Classes.**
@@ -778,12 +783,12 @@ Goal: the hub earns money, sounds alive and tells you when something needs atten
 
   | Class | Model label | Mix | Size L × W (m) | Rate / day | Service every | Lot row |
   |---|---|---|---|---|---|---|
-  | Economy | Economy hatchback | 15% | 4.1 × 1.75 | $42 | 5,000 mi | Cars |
+  | Economy | Economy hatchback | 15% | 4.75 × 1.75 (D56; was 4.1) | $42 | 5,000 mi | Cars |
   | Sedan | Mid-size sedan | 20% | 4.8 × 1.85 | $55 | 6,000 mi | Cars |
   | Luxury | Premium saloon | 5% | 5.1 × 1.9 | $119 | 7,500 mi | Cars |
   | SUV | Full-size SUV | 15% | 5.3 × 2.0 | $78 | 6,000 mi | SUVs & vans |
   | Minivan | 7-seat minivan | 5% | 5.15 × 2.0 | $89 | 5,500 mi | SUVs & vans |
-  | Pickup | Crew-cab pickup | 5% | 5.8 × 2.0 | $84 | 4,500 mi | SUVs & vans |
+  | Pickup | Crew-cab pickup | 5% | 5.3 × 2.0 (D56; was 5.8) | $84 | 4,500 mi | SUVs & vans |
   | EV | Compact EV crossover | 35% | 4.75 × 1.92 | $68 | 10,000 mi | EV |
 
   The fleet stays at **120**. Each row keeps its share (Cars 40%, SUVs & vans 25%, EV 35%), so the load on the energy station and the lot is the same as in M7.
@@ -791,11 +796,11 @@ Goal: the hub earns money, sounds alive and tells you when something needs atten
   - Ready-lot stalls are tagged by row (`cars`, `large`, `ev`) instead of by class. Stall IDs become `cars-01`…`cars-18`, `large-01`…`large-12` and `ev-01`…`ev-18`, and are shown as e.g. "Cars row · stall 4".
   - A car stages in its class's row. The existing fallback to any free stall after 120 s is kept.
   - A customer is matched to a car of the class they booked; failing that, any car in the same row; failing that, any ready car (as today).
-  - Stalls are 9 m deep, so the 5.8 m pickup fits. The no-overlap rules (L-4) are unchanged.
+  - Stalls are 9 m deep, so every class fits. The no-overlap rules (L-4) are unchanged.
 - **FE-4 Mileage-based maintenance.**
   - Each vehicle tracks the odometer reading at its last service. New vehicles start part-way through their interval, so they don't all fall due together.
   - At inspection, a vehicle whose mileage since its last service has reached its class interval is flagged for **scheduled service** (a new reason, alongside tyres, oil and damage).
-  - Otherwise, a random wear or damage roll can still flag it. Its chance drops from 10% to about 4%, so the **total flag rate stays at about 8–12% of inspections** (calibrated in Stage 4).
+  - Otherwise, a random wear or damage roll can still flag it. Its chance drops from 10% to 6% (D57), so the **total flag rate stays at about 8–12% of inspections**.
   - Only the random damage path can be **severe** and need the tow truck (L-1 step 4); a scheduled service never is.
   - Finishing service resets the vehicle's last-service mileage to its odometer.
 - **FE-5 Revenue.**
@@ -807,7 +812,7 @@ Goal: the hub earns money, sounds alive and tells you when something needs atten
 
   | Mode | Simulation |
   |---|---|
-  | Fog | Vehicle speeds −15% |
+  | Fog | Vehicle speeds −10% (D60; proposed −15%) |
   | Thunderstorm | Vehicle speeds −25% (heavier than rain) |
 
   Demand and charging are at baseline in both.
@@ -896,7 +901,7 @@ Goal: the hub earns money, sounds alive and tells you when something needs atten
   - Hidden in embed and kiosk modes. On a phone, one toast at a time, full width.
 
 ### 14.7 Budgets and non-functional
-- **Draw calls:** M9 adds at most 20 at tier 0 (12 for the 4 new classes, plus particles, halos and the bolt) and at most 14 at tier 2. The limits stay: ≤ 300 at tier 0 and ≤ 150 at tier 2, at night in a thunderstorm. **Risk:** the tier 2 headroom is measured before Stage 4 starts.
+- **Draw calls:** M9 adds at most 20 at tier 0 (12 for the 4 new classes, plus particles, halos and the bolt) and at most 14 at tier 2. The limits stay: ≤ 300 at tier 0 and ≤ 150 at tier 2, at night in a thunderstorm. **Measured in Stage 4:** +24 at tier 0 (the new cars also draw in the shadow pass; 169 of 300) and +13 at tier 2 (90 of 150); see architecture §22.11. **To confirm.**
 - **Bundle:** at most +40 KB gzipped (limit 600 KB).
 - **Simulation:** both simulations at 45× stay ≤ 4 ms per frame (§9.6).
 - **Audio:** at most 16 voices, and no work at all while muted (the audio context isn't created until sound is first turned on).
@@ -908,7 +913,8 @@ Goal: the hub earns money, sounds alive and tells you when something needs atten
   - **Fog:** the Balanced targets, with turnaround ≤ 50 min.
   - **Thunderstorm:** a stress case like heatwave: served ≥ 85%, no overlap or gridlock, and queues recover after each peak.
 - Every §12.4 target is re-verified with 7 classes.
-- The maintenance flag rate is 8–12% of inspections over a day.
+- The maintenance flag rate is 8–12% of inspections, pooled over the three seeds' days (D59).
+- Rain utilisation is at least 58% (D59).
 
 ### 14.9 User stories
 - As an **ops manager**, I glance at "Revenue today $18,420 · At risk $1,240" and see what the counter backlog is costing.
@@ -922,7 +928,7 @@ Goal: the hub earns money, sounds alive and tells you when something needs atten
 ### 14.10 Resolved (approved 2026-10-13: all proposed defaults accepted)
 - **Q1 Rates, intervals and mix:** **as in FE-2.**
 - **Q2 Fog and Thunderstorm:** **new weather modes** (6 in all).
-- **Q3 Speed factors:** **fog −15%, thunderstorm −25%.**
+- **Q3 Speed factors:** **fog −15%, thunderstorm −25%.** (Fog changed to −10% in Stage 4, D60.)
 - **Q4 Revenue reset:** **at hub midnight** ("Revenue today"); the running total is in the test hooks only.
 - **Q5 Mute key:** **`M`** (no existing shortcut uses it).
 - **Draw-call risk (§14.7), measured:** the highest tier-2 count so far is 76 (M6, airport area), so +14 stays well under 150.

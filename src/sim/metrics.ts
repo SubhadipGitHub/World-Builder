@@ -1,3 +1,4 @@
+import { energyOf } from '../config/fleet';
 import type { VehicleState } from './lifecycle';
 import type { VehicleClass } from './types';
 
@@ -39,7 +40,7 @@ export function averageReadyEvSoc(vehicles: readonly SocSample[]): number | null
   let sum = 0;
   let n = 0;
   for (const v of vehicles) {
-    if (v.cls === 'ev' && v.state === 'staged' && v.socPct !== null) {
+    if (energyOf(v.cls) === 'electric' && v.state === 'staged' && v.socPct !== null) {
       sum += v.socPct;
       n++;
     }

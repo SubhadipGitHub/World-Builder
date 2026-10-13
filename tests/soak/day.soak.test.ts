@@ -11,7 +11,10 @@ import { createSim } from '../../src/sim/world';
 const SEEDS = [1, 2, 3];
 // M9 (§14.8): fog joins the Balanced set with a 50-minute turnaround target.
 const BALANCED: readonly WeatherMode[] = ['clear', 'overcast', 'fog', 'rain'];
+// M9: fog's target is 50 min (it slows driving by 10%, D60; rain by 20%).
 const TURNAROUND_TARGET: Readonly<Partial<Record<WeatherMode, number>>> = { clear: 45, overcast: 45, fog: 50, rain: 55 };
+// D59: rain slows driving by 20%, so its utilisation floor is 58% (60% elsewhere, D37).
+const UTILISATION_FLOOR: Readonly<Partial<Record<WeatherMode, number>>> = { rain: 0.58 };
 const STEPS = Math.round(86_400 / (rates.stepWallSec * rates.timeScale));
 /** Hub hours 60 minutes after each peak ends (morning peak 10:00, evening peak 20:00). */
 const RECOVERY_HOURS = [11, 21];
@@ -23,8 +26,9 @@ interface Day {
   served: number;
   maxQueue: number;
   recovery: { hour: number; queue: number }[];
-  /** M9 (§14.8): maintenance flags ÷ inspections, and the revenue booked over the day. */
-  flagRate: number;
+  /** M9 (§14.8): maintenance flags and inspections, and the revenue booked over the day. */
+  flags: number;
+  inspections: number;
   revenue: number;
 }
 
@@ -88,7 +92,8 @@ function runDay(seed: number, mode: WeatherMode): Day {
     served: checkouts / Math.max(1, requests),
     maxQueue,
     recovery,
-    flagRate: flags / Math.max(1, inspections),
+    flags,
+    inspections,
     revenue: sim.metrics().revenue.total,
   };
 }
@@ -100,7 +105,7 @@ describe('day-long calibration (§12.4, Balanced)', () => {
         const d = runDay(seed, mode);
         // D31: rain slows driving by 20%, so its turnaround target is 55 min; M9: fog 50 min.
         expect(d.turnaround, 'average turnaround (min)').toBeLessThanOrEqual(TURNAROUND_TARGET[mode] ?? 45);
-        expect(d.utilisation, 'average utilisation').toBeGreaterThanOrEqual(0.6);
+        expect(d.utilisation, 'average utilisation').toBeGreaterThanOrEqual(UTILISATION_FLOOR[mode] ?? 0.6);
         // D37: 60–75%, room for the seed-to-seed spread in demand (was 60–70%).
         expect(d.utilisation, 'average utilisation').toBeLessThanOrEqual(0.75);
         expect(d.served, 'pickups served').toBeGreaterThanOrEqual(0.9);
@@ -140,14 +145,19 @@ describe('thunderstorm stress case (M9, §14.8)', () => {
 });
 
 describe('fleet economics over a day (M9, FE-4, FE-5)', () => {
-  for (const seed of SEEDS) {
-    it(`seed ${String(seed)}, clear: 8–12% of inspections flag maintenance, and revenue is plausible`, () => {
+  it('clear, seeds 1–3 pooled: 8–12% of inspections flag maintenance, and each day books plausible revenue', () => {
+    // D59: pooled over three days (~1,450 inspections, ±0.8 pt of binomial noise); one day's ~480 gave ±1.3 pt.
+    let flags = 0;
+    let inspections = 0;
+    for (const seed of SEEDS) {
       const d = runDay(seed, 'clear');
-      expect(d.flagRate, 'maintenance flags per inspection').toBeGreaterThanOrEqual(0.08);
-      expect(d.flagRate, 'maintenance flags per inspection').toBeLessThanOrEqual(0.12);
+      flags += d.flags;
+      inspections += d.inspections;
       // About 480 rentals at $42–$119 a day: a sanity band, not a target.
-      expect(d.revenue).toBeGreaterThanOrEqual(25_000);
-      expect(d.revenue).toBeLessThanOrEqual(40_000);
-    });
-  }
+      expect(d.revenue, `revenue, seed ${String(seed)}`).toBeGreaterThanOrEqual(25_000);
+      expect(d.revenue, `revenue, seed ${String(seed)}`).toBeLessThanOrEqual(40_000);
+    }
+    expect(flags / inspections, 'maintenance flags per inspection').toBeGreaterThanOrEqual(0.08);
+    expect(flags / inspections, 'maintenance flags per inspection').toBeLessThanOrEqual(0.12);
+  });
 });

@@ -37,6 +37,8 @@ export interface SiteFrame {
   readonly reducedMotion: boolean;
   /** Vehicles near the booms (interpolated positions). */
   readonly vehicles: readonly MovingVehicle[];
+  /** Wind strength 0–1 (M9, FE-13): flags wave faster and wider in a stronger wind; omitted = M5 behaviour. */
+  readonly wind?: number;
 }
 
 export interface SiteView {
@@ -363,7 +365,8 @@ export function createSiteView(palette: Palette, sharedAtlas?: TextAtlas | null)
         for (let i = 0; i < flagPos.count; i++) {
           const [u, vv] = flagUV[i] ?? [0, 0];
           const f = plan.flags[Math.floor(i / per)];
-          const d = flagWave(frame.wallTime + Math.floor(i / per) * 0.7, u, vv, detail.flagRate);
+          const gust = frame.wind === undefined ? 1 : 0.4 + 1.2 * frame.wind;
+          const d = gust * flagWave(frame.wallTime + Math.floor(i / per) * 0.7, u, vv, detail.flagRate * gust);
           // Displace sideways to the flag (perpendicular to its heading).
           const nx = f ? -Math.sin(f.heading) : 0;
           const nz = f ? Math.cos(f.heading) : 0;

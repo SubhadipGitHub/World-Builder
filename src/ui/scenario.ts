@@ -1,9 +1,9 @@
-import { CREW_STATIONS, OUTAGE_KINDS, deltaLingerSimSec, noiseBand, presets, type CrewLevel, type CrewStation, type OutageKind, type PresetId } from '../config/scenarios';
+import { CREW_STATIONS, OUTAGE_KINDS, deltaLingerSimSec, noiseBand, presets, revenueNoiseShare, type CrewLevel, type CrewStation, type OutageKind, type PresetId } from '../config/scenarios';
 import type { WeatherMode } from '../config/weather';
 import type { ScenarioCommand, ScenarioView } from '../sim/scenario';
 import type { Snapshot } from '../sim/world';
 import { hub } from '../layout/hub';
-import { unitLabel } from './format';
+import { formatMoneyShort, unitLabel } from './format';
 import type { KpiId } from './kpis';
 import type { OutageGroup } from './m4/WhatIfDrawer';
 
@@ -76,6 +76,11 @@ export interface KpiDelta {
 export function kpiDelta(id: KpiId, scenario: number | null, baseline: number | null): KpiDelta | null {
   if (scenario === null || baseline === null) return null;
   const d = scenario - baseline;
+  if (id === 'revenue') {
+    // FE-8, F22: dollars, up is good; noise is the larger of $500 and 3% of the baseline.
+    if (Math.abs(d) < Math.max(noiseBand.revenue, revenueNoiseShare * Math.abs(baseline))) return { text: '≈ normal', tone: 'neutral' };
+    return { text: `${formatMoneyShort(d)} vs normal`, tone: d > 0 ? 'good' : 'bad' };
+  }
   if (Math.abs(d) < noiseBand[id]) return { text: '≈ normal', tone: 'neutral' };
   const n = Math.round(Math.abs(d));
   const sign = d > 0 ? '+' : '−';

@@ -1,11 +1,12 @@
 import { trend, type Trend } from '../sim/metrics';
 import type { Metrics } from '../sim/world';
+import { formatMoney } from './format';
 
 export type KpiId = 'turnaround' | 'utilisation' | 'evSoc' | 'revenue';
 
 export interface KpiCard {
   readonly id: KpiId;
-  /** "Turnaround time", "Fleet utilisation", "EV state of charge". */
+  /** "Turnaround time", "Fleet utilisation", "EV state of charge", "Revenue today". */
   readonly label: string;
   /** e.g. "54 min", "65%", "86%"; "—" when unknown. */
   readonly value: string;
@@ -27,9 +28,17 @@ interface Values {
   readonly turnaround: number | null;
   readonly utilisation: number;
   readonly evSoc: number | null;
+  readonly revenue: number;
 }
 
-const valuesOf = (m: Metrics): Values => ({ turnaround: m.turnaroundMin, utilisation: m.utilisation * 100, evSoc: m.readyEvSocPct });
+const valuesOf = (m: Metrics): Values => ({ turnaround: m.turnaroundMin, utilisation: m.utilisation * 100, evSoc: m.readyEvSocPct, revenue: m.revenue.today });
+
+/** Revenue changes under a dollar show as flat. */
+const REVENUE_EPSILON = 1;
+
+/** "At risk $1,240 · 18 waiting > 20 min", or "No customers at risk" (FE-8). */
+const atRiskText = (m: Metrics): string =>
+  m.revenue.atRiskCount === 0 ? 'No customers at risk' : `At risk ${formatMoney(m.revenue.atRisk)} · ${String(m.revenue.atRiskCount)} waiting > 20 min`;
 
 /** Default sample period: 5 simulated minutes. */
 export function createKpiTracker(samplePeriodSec = 300): KpiTracker {
@@ -73,6 +82,7 @@ export function createKpiTracker(samplePeriodSec = 300): KpiTracker {
           trend: trend(ref?.utilisation ?? null, v.utilisation, EPSILON),
         },
         { id: 'evSoc', label: 'EV state of charge', value: pct(v.evSoc), sub: 'Ready EVs', trend: trend(ref?.evSoc ?? null, v.evSoc, EPSILON) },
+        { id: 'revenue', label: 'Revenue today', value: formatMoney(v.revenue), sub: atRiskText(metrics), trend: trend(ref?.revenue ?? null, v.revenue, REVENUE_EPSILON) },
       ];
     },
   };

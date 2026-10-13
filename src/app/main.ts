@@ -1,4 +1,3 @@
-import { notImplemented } from '../shared/notImplemented';
 import { signal } from '@preact/signals';
 import { h, render } from 'preact';
 import { Raycaster, Vector2, Vector3 } from 'three';
@@ -21,6 +20,14 @@ import { createRain } from '../render/rain';
 import { createScene } from '../render/scene';
 import { createSelectionRing } from '../render/selection';
 import { airportPlan } from '../airport/plan';
+import type { AircraftPose } from '../airport/flights';
+import { phaseChanges, type PhaseChange } from '../airport/phases';
+import { lampPlacements } from '../layout/lamps';
+import { createBolt } from '../render/bolt';
+import { createHalos } from '../render/halos';
+import { createLightningSchedule, flashLevel, type Strike } from '../render/lightning';
+import { createParticlesView } from '../render/particlesView';
+import { createWindsock } from '../render/windsock';
 import { airportTexts, createAirportView } from '../render/airport/view';
 import { createSiteView } from '../render/site';
 import { signEntries } from '../render/site/signs';
@@ -31,12 +38,16 @@ import { buildWorld } from '../render/world';
 import type { Vec2 } from '../sim/types';
 import type { ScenarioCommand } from '../sim/scenario';
 import { createSim, type Command, type Metrics, type Snapshot } from '../sim/world';
-import { createAlertFeed } from '../ui/alerts';
+import { createAlertFeed, type Alert } from '../ui/alerts';
 import { formatClock, unitLabel } from '../ui/format';
 import { COMPACT_DISTANCE, FACILITIES, declutter, facilityStatuses, type FacilityId, type FacilityStatus } from '../ui/facilities';
 import { createKpiTracker, type KpiId } from '../ui/kpis';
 import { PLACES, type PlaceId } from '../ui/places';
-import { DEFAULT_VOLUME, LABELS_KEY, loadFlag, saveFlag } from '../ui/prefs';
+import { DEFAULT_VOLUME, LABELS_KEY, SOUND_KEY, TOASTS_KEY, VOLUME_KEY, loadFlag, loadNumber, saveFlag, saveNumber } from '../ui/prefs';
+import { createToastStore, type Toast } from '../ui/toasts';
+import { bedMix, createCuePlanner } from '../audio/cues';
+import { createSoundEngine, type SoundEngine } from '../audio/engine';
+import type { SimEvent } from '../sim/events';
 import { cameraLimits } from './limits';
 import type { Speed } from '../ui/m4/SpeedControl';
 import {
@@ -145,6 +156,20 @@ function start(root: HTMLElement): void {
   const site = createSiteView(paletteFor(theme), atlas);
   const airport = createAirportView(paletteFor(theme), atlas);
   scene.add(sky.group, site.group, airport.group, world.group, agents.group, ring.mesh, rain.mesh);
+  // M9 weather FX (FE-11…FE-15): fog halos, the lightning bolt, the windsock and ambient particles.
+  const halos = createHalos([...lampPlacements(), ...airportPlan().masts]);
+  const bolt = createBolt();
+  const windsock = createWindsock();
+  scene.add(halos.mesh, bolt.line, windsock.group);
+  const particles = createParticlesView(scene);
+  const lightning = createLightningSchedule(link.seed);
+  /** Storm wall clock: real seconds while not paused, never sped up, so strikes stay ≥ 8 s apart (F12). */
+  let stormClock = 0;
+  let strikeCount = 0;
+  let lastStrike: Strike | null = null;
+  let newStrikes: readonly Strike[] = [];
+  let prevAircraft: readonly AircraftPose[] = [];
+  let phases: readonly PhaseChange[] = [];
   const atmosphere = createAtmosphere({ renderer, scene, hemi, sun, world, agents, rain }, paletteFor(theme));
   atmosphere.setPalette(paletteFor(theme));
   const post = createPostPipeline(renderer, scene, camera);
@@ -200,6 +225,15 @@ function start(root: HTMLElement): void {
 
   const clockAt = (t: number): string => formatClock((((curr.clockHours + (t - curr.simTimeSec) / 3600) % 24) + 24) % 24);
 
+  // M9 pop-up alerts (FE-19, FE-20): one at a time on a phone.
+  const phone = typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 720px)').matches;
+  const toastStore = createToastStore({ maxVisible: phone ? 1 : undefined });
+  /** Toasts shown this frame, for their chimes. */
+  let newToasts: Toast[] = [];
+  const toastAlerts = (created: readonly Alert[]): void => {
+    newToasts.push(...toastStore.ingest(created, performance.now()));
+  };
+
   let baselineMetrics: Metrics = baseline.metrics();
   let baselineQueues = queueSummary(baseline.snapshot());
   const kpiValues = (m: Metrics): Readonly<Record<KpiId, number | null>> => ({
@@ -217,6 +251,7 @@ function start(root: HTMLElement): void {
       turnaround: kpiDelta('turnaround', now.turnaround, base.turnaround),
       utilisation: kpiDelta('utilisation', now.utilisation, base.utilisation),
       evSoc: kpiDelta('evSoc', now.evSoc, base.evSoc),
+      revenue: kpiDelta('revenue', now.revenue, base.revenue),
     };
   };
 
@@ -236,8 +271,8 @@ function start(root: HTMLElement): void {
       places: settings.value.labels ? PLACES.map((p) => ({ id: p.id, name: p.name })) : [],
       queues: queueSummary(curr),
       baselineQueues,
-      toasts: [], // Stage 3 placeholder (M9, FE-19)
-      toastOverflow: 0,
+      toasts: toastStore.visible(),
+      toastOverflow: toastStore.overflow(),
     };
   };
   const tableData = (): TableData => ({ fleet: fleetRows(curr), queue: queueRows(curr), checkouts: checkoutLog.rows() });
@@ -249,11 +284,12 @@ function start(root: HTMLElement): void {
     theme,
     speed: 1,
     labels: link.labels ?? loadFlag(storage, LABELS_KEY, true),
-    // Stage 3 placeholders (M9, FE-18, FE-20): Stage 4 loads these from prefs.
-    sound: false,
-    volume: DEFAULT_VOLUME,
-    toasts: true,
+    // M9 (FE-18, FE-20): remembered per browser; sound starts muted.
+    sound: loadFlag(storage, SOUND_KEY, false),
+    volume: loadNumber(storage, VOLUME_KEY, DEFAULT_VOLUME, 0, 100),
+    toasts: loadFlag(storage, TOASTS_KEY, true),
   });
+  toastStore.setEnabled(settings.value.toasts);
   const data = signal<DashboardData>(dashboardData());
 
   // ---------- share: links, kiosk, screenshot, help (M8, §21) ----------
@@ -390,6 +426,36 @@ function start(root: HTMLElement): void {
   // ---------- what-if commands (§9, W8) ----------
 
   let speed: Speed = 1;
+
+  // ---------- sound (M9, FE-16…FE-18) ----------
+
+  /** Created on the first gesture that turns sound on (F17); never in embed mode. */
+  let sound: SoundEngine | null = null;
+  const planner = createCuePlanner();
+  let frameEvents: readonly SimEvent[] = [];
+  const ensureSound = (): SoundEngine | null => {
+    if (mode === 'embed' || typeof AudioContext === 'undefined') return null;
+    sound ??= createSoundEngine({ createContext: () => new AudioContext(), doc: document });
+    sound.setVolume(settings.value.volume / 100);
+    return sound;
+  };
+  const setSound = (on: boolean): void => {
+    if (mode === 'embed') return;
+    saveFlag(storage, SOUND_KEY, on);
+    settings.value = { ...settings.value, sound: on };
+    if (on) ensureSound()?.enable();
+    else sound?.disable();
+  };
+  // A saved "on" waits for the first gesture: browsers refuse audio before one (F17).
+  if (settings.value.sound && mode !== 'embed') {
+    const arm = (): void => {
+      window.removeEventListener('pointerdown', arm, true);
+      window.removeEventListener('keydown', arm, true);
+      if (settings.value.sound) ensureSound()?.enable();
+    };
+    window.addEventListener('pointerdown', arm, true);
+    window.addEventListener('keydown', arm, true);
+  }
   /** Applies commands to the visible simulation only, then shows their effect at once (even while paused). */
   const applyVisible = (commands: readonly Command[]): void => {
     for (const c of commands) sim.apply(c);
@@ -397,7 +463,7 @@ function start(root: HTMLElement): void {
     if (commands.some((c) => c.type === 'surge')) airport.surge();
     const events = sim.drainEvents();
     timeline.ingest(events);
-    alertFeed.ingest(events);
+    toastAlerts(alertFeed.ingest(events));
     checkoutLog.ingest(events);
     // Same tick, so agents are unchanged: only the scenario view and unit flags differ.
     curr = sim.snapshot();
@@ -478,8 +544,34 @@ function start(root: HTMLElement): void {
       onSelectVehicle: (id: string) => {
         store.select({ kind: 'agent', id });
       },
-      // Stage 3 placeholders (M9, FE-18…FE-20).
-      audio: { onSound: notImplemented, onVolume: notImplemented, onToasts: notImplemented, onToast: notImplemented, onDismissToast: notImplemented, onHoldToast: notImplemented },
+      audio: {
+        onSound: setSound,
+        onVolume: (v: number) => {
+          saveNumber(storage, VOLUME_KEY, v);
+          settings.value = { ...settings.value, volume: v };
+          sound?.setVolume(v / 100);
+        },
+        onToasts: (on: boolean) => {
+          saveFlag(storage, TOASTS_KEY, on);
+          toastStore.setEnabled(on);
+          settings.value = { ...settings.value, toasts: on };
+          data.value = dashboardData();
+        },
+        onToast: (t: Toast) => {
+          if (t.vehicleId) store.select({ kind: 'agent', id: t.vehicleId });
+          else if (t.unitId) store.select({ kind: 'resource', id: t.unitId });
+          alertFeed.markRead(t.alertId);
+          toastStore.dismiss(t.id);
+          data.value = dashboardData();
+        },
+        onDismissToast: (id: string) => {
+          toastStore.dismiss(id);
+          data.value = dashboardData();
+        },
+        onHoldToast: (id: string, on: boolean) => {
+          toastStore.hold(id, on, performance.now());
+        },
+      },
       onLabels: (on: boolean) => {
         saveFlag(storage, LABELS_KEY, on);
         settings.value = { ...settings.value, labels: on };
@@ -626,6 +718,8 @@ function start(root: HTMLElement): void {
     } else if (key === '?') {
       e.preventDefault();
       patchShare({ helpOpen: true });
+    } else if (key === 'm') {
+      setSound(!settings.value.sound);
     }
   });
   window.addEventListener('resize', resize);
@@ -721,8 +815,9 @@ function start(root: HTMLElement): void {
       sim.step();
       curr = sim.snapshot();
       const events = sim.drainEvents();
+      frameEvents = events;
       timeline.ingest(events);
-      alertFeed.ingest(events);
+      toastAlerts(alertFeed.ingest(events));
       checkoutLog.ingest(events);
       throughput.observe(curr.resources, curr.simTimeSec);
     }
@@ -750,7 +845,17 @@ function start(root: HTMLElement): void {
     // when a frame stalls (shader compiles, slow GPUs); the simulation keeps its 0.25 s cap.
     if (kiosk) kioskStep(Math.min(KIOSK_MAX_STEP_SEC, rawDt));
     rig.update(Math.min(1, rawDt));
-    environment = environmentFor(weatherMode, curr.clockHours, dayNight, { reducedMotion, qualityTier });
+    if (weatherMode === 'storm' && speed > 0) {
+      const t0 = stormClock;
+      stormClock += Math.min(1, rawDt);
+      newStrikes = lightning.strikesBetween(t0, stormClock);
+      strikeCount += newStrikes.length;
+    } else {
+      newStrikes = [];
+    }
+    lastStrike = weatherMode === 'storm' ? lightning.last(stormClock) : null;
+    const flash = flashLevel(stormClock, lastStrike, { reducedMotion });
+    environment = environmentFor(weatherMode, curr.clockHours, dayNight, { reducedMotion, qualityTier, tSec: elapsed, flash: flash.light });
     atmosphere.apply(environment, dt, rig.state().target);
     const q = settingsFor(qualityTier);
     world.update({ dt, wallTime: elapsed, reducedMotion, poolFraction: q.lampPoolFraction, details });
@@ -762,6 +867,7 @@ function start(root: HTMLElement): void {
       night: environment.nightFactor,
       tier: qualityTier,
       reducedMotion,
+      wind: reducedMotion ? undefined : environment.wind.strength,
       vehicles: curr.agents.flatMap((a) => {
         if (a.kind === 'pedestrian') return [];
         const p = poses.get(a.id);
@@ -771,10 +877,60 @@ function start(root: HTMLElement): void {
     // Visual-only clock: real frame time (capped at 1 s, like the camera) so flights keep pace even
     // when frames are slow; the speed multiplier still pauses and fast-forwards it (H2).
     airportTime += Math.min(1, rawDt) * speed;
-    airport.update({ time: airportTime, night: environment.nightFactor, tier: qualityTier, reducedMotion, lampLevel: world.lampsLit() });
+    // Fog (FE-11): runway and taxiway lights on in daytime too.
+    airport.update({ time: airportTime, night: environment.nightFactor, tier: qualityTier, reducedMotion, lampLevel: environment.headlightsByDay ? Math.max(lampsLit, 0.8) : lampsLit });
+    const aircraftNow = airport.aircraft();
+    phases = phaseChanges(prevAircraft, aircraftNow);
+    prevAircraft = aircraftNow;
+    // Wind (FE-13): foliage sway (off on tier 2 and with reduced motion), the windsock; the halos in fog and mist.
+    world.sway.update(environment.wind, elapsed, !reducedMotion && qualityTier < 2);
+    windsock.update(environment.wind, !reducedMotion);
+    halos.update(lampsLit, environment.fog ? 1 : 0.6 * environment.mist, camera.quaternion);
+    bolt.update(lastStrike, flash.bolt && qualityTier < 2, rig.state().target);
+    particles.update({
+      dt: speed > 0 ? dt : 0,
+      env: environment,
+      tier: qualityTier,
+      reducedMotion,
+      around: rig.state().target,
+      cameraQuaternion: camera.quaternion,
+      agents: curr.agents.flatMap((a) => {
+        const p = poses.get(a.id);
+        return p ? [{ id: a.id, kind: a.kind, cls: a.cls, x: p.x, z: p.z, heading: p.heading, speed: a.speed }] : [];
+      }),
+      washBays: curr.resources.filter((r) => r.kind === 'wash' && r.progress !== null).map((r) => unitMarker(r.id)),
+      aircraft: aircraftNow,
+      phases,
+    });
+    // Sound (FE-16, FE-17): cues from this frame's events, jets, thunder and new toasts, plus the beds.
+    if (sound && settings.value.sound) {
+      const cam = rig.state();
+      const listener = { x: cam.target.x, z: cam.target.z, distance: cam.distance };
+      sound.play(
+        planner.plan({
+          events: frameEvents,
+          phases,
+          strikes: newStrikes.map((s) => ({ strike: s, x: cam.target.x + Math.cos(s.azimuthRad) * s.distanceM, z: cam.target.z + Math.sin(s.azimuthRad) * s.distanceM })),
+          newToasts,
+          listener,
+          project: (x, z) => {
+            const p = toScreen(x, 0, z);
+            return p ? (p.x / Math.max(1, window.innerWidth)) * 2 - 1 : null;
+          },
+          gateAt: (id) => unitMarker(id),
+          paused: speed === 0,
+          nowSec: elapsed,
+        }),
+      );
+      const washBusy = curr.resources.filter((r) => r.kind === 'wash' && r.progress !== null).length;
+      sound.setBeds(bedMix(environment, { paused: speed === 0, washBusy, listenerDistance: cam.distance }));
+    }
+    frameEvents = [];
+    newToasts = [];
     placeLabels();
     sky.group.position.set(camera.position.x, 0, camera.position.z);
-    sky.update(skyColours(environment, weatherMode), q.clouds, reducedMotion ? 0 : dt);
+    // Clouds drift with the wind (FE-13).
+    sky.update(skyColours(environment, weatherMode), q.clouds, reducedMotion ? 0 : dt * (0.5 + 1.5 * environment.wind.strength));
 
     renderer.info.reset();
     effects = postEffectsFor({ nightFactor: environment.nightFactor, qualityTier, shimmer: environment.shimmer });
@@ -791,7 +947,8 @@ function start(root: HTMLElement): void {
     if (panelClock >= PANEL_REFRESH_SEC) {
       panelClock = 0;
       kpis.observe(sim.metrics(), curr.simTimeSec);
-      alertFeed.observeSnapshot(curr, rates.evStageSocPct);
+      toastAlerts(alertFeed.observeSnapshot(curr, rates.evStageSocPct));
+      toastStore.tick(performance.now());
       baselineMetrics = baseline.metrics();
       baselineQueues = queueSummary(baseline.snapshot());
       data.value = dashboardData();
@@ -897,14 +1054,22 @@ function start(root: HTMLElement): void {
       },
       advanceKiosk: kioskStep,
       help: () => share.value.helpOpen,
-      // Stage 3 placeholders (M9, §22).
-      audioState: notImplemented,
-      toasts: notImplemented,
+      audioState: () => sound?.state() ?? null,
+      toasts: () => ({
+        visible: toastStore.visible().map((t) => ({ id: t.id, severity: t.severity, message: t.message, count: t.count })),
+        overflow: toastStore.overflow(),
+      }),
       revenue: () => sim.metrics().revenue,
       wind: () => environment.wind,
-      lightning: notImplemented,
-      particleCount: notImplemented,
-      forceAlert: notImplemented,
+      lightning: () => ({ strikes: strikeCount, lastStrikeT: lastStrike?.t ?? null, flash: environment.flash }),
+      particleCount: () => particles.live(),
+      forceAlert: (severity) => {
+        const car = curr.agents.find((a) => a.kind === 'fleet' && a.cls !== null);
+        if (!car?.cls) throw new Error('No fleet car on the map');
+        toastAlerts(alertFeed.ingest([{ type: 'maintenanceFlagged', vehicleId: car.id, cls: car.cls, reason: 'tyres', severe: severity === 'critical', simTimeSec: curr.simTimeSec }]));
+        data.value = dashboardData();
+        return car.id;
+      },
     };
     window.__hub = hooks;
   }

@@ -1,8 +1,9 @@
+import { energyOf } from '../config/fleet';
 import type { Tier } from '../config/brand';
 import { areaById, areaOf } from '../layout/positions';
 import type { SimEvent } from '../sim/events';
 import type { ResourceKind, Snapshot } from '../sim/world';
-import { classLabel, formatDuration, formatPercent, stateLabel, unitLabel } from './format';
+import { classLabel, formatDuration, formatPercent, formatRate, stateLabel, unitLabel } from './format';
 
 export interface FleetRow {
   readonly id: string;
@@ -53,7 +54,7 @@ export function fleetRows(snapshot: Snapshot): readonly FleetRow[] {
       id: a.id,
       model: a.cls ? classLabel(a.cls) : '—',
       status: a.state ? stateLabel(a.state) : '—',
-      energy: a.cls === 'ev' ? `Battery ${formatPercent(a.socPct)}` : `Fuel ${formatPercent(a.fuelPct)}`,
+      energy: a.cls !== null && energyOf(a.cls) === 'electric' ? `Battery ${formatPercent(a.socPct)}` : `Fuel ${formatPercent(a.fuelPct)}`,
       location: locationLabel(a.x, a.z),
     }))
     .sort((p, q) => (p.id < q.id ? -1 : p.id > q.id ? 1 : 0));
@@ -97,8 +98,15 @@ export function createCheckoutLog(max = 50): CheckoutLog {
     ingest(events) {
       for (const e of events) {
         if (e.type !== 'checkout') continue;
-        // Stage 3 placeholders for model and rate (M9, FE-9).
-        rows.unshift({ agreementNo: e.agreementNo, vehicleId: e.vehicleId, tier: e.tier, gate: unitLabel(e.gateId), model: '', rate: '', simTimeSec: e.simTimeSec });
+        rows.unshift({
+          agreementNo: e.agreementNo,
+          vehicleId: e.vehicleId,
+          tier: e.tier,
+          gate: unitLabel(e.gateId),
+          model: classLabel(e.cls),
+          rate: formatRate(e.ratePerDay),
+          simTimeSec: e.simTimeSec,
+        });
       }
       if (rows.length > max) rows = rows.slice(0, max);
     },

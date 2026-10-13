@@ -1,6 +1,7 @@
-import { dimensions, facility } from '../config/facility';
+import { dimensions, facility, maxFleetLength } from '../config/facility';
+import type { LotRow } from '../config/fleet';
 import { buildLaneGraph, type EdgeSpec, type LaneGraph, type LaneGraphSpec, type NodeSpec } from '../sim/graph/laneGraph';
-import type { AgentKind, Vec2, VehicleClass } from '../sim/types';
+import type { AgentKind, Vec2 } from '../sim/types';
 
 /**
  * The GoldLane hub: one facility definition shared by the simulation (lane graph,
@@ -17,7 +18,8 @@ export interface UnitLayout {
   /** Edge whose end is the parking spot. */
   readonly parkEdge: string;
   /** Ready-lot class row. */
-  readonly tag?: VehicleClass;
+  /** Ready-lot row of a slot (M9, FE-3). */
+  readonly tag?: LotRow;
   /** Service bays only: the edge just past the bay where a tow truck stops to set a car down. */
   readonly beyondEdge?: string;
 }
@@ -71,7 +73,7 @@ export interface HubLayout {
   };
   readonly shuttle: { readonly loop: readonly string[]; readonly stopEdge: string };
   readonly serviceLoop: readonly string[];
-  readonly walkway: { readonly doorEdge: string; readonly routes: Readonly<Record<VehicleClass, readonly string[]>> };
+  readonly walkway: { readonly doorEdge: string; readonly routes: Readonly<Record<LotRow, readonly string[]>> };
   readonly buildings: readonly BuildingLayout[];
   readonly areas: readonly AreaLayout[];
 }
@@ -158,7 +160,7 @@ const returnUnits: UnitLayout[] = LANE_Z.map((z, i) => {
 // ---------- tow bay (spur north of the road) ----------
 
 const TOW_GAP = 1.0;
-const TOW_CARRY = dimensions.tow.length + TOW_GAP + Math.max(dimensions.sedan.length, dimensions.suv.length, dimensions.ev.length);
+const TOW_CARRY = dimensions.tow.length + TOW_GAP + maxFleetLength;
 
 const TP = node('tp', -45, -70);
 edge('r1', M_RET, TP, { speed: SPEED.road });
@@ -293,14 +295,15 @@ const LE = node('le', 80, 85);
 const lotQueue = edge('lot_q', ME, LE, { speed: SPEED.lot });
 
 interface Row {
-  readonly cls: VehicleClass;
+  /** Lot row (M9, FE-3, D51): Cars, SUVs & vans, EV; the geometry is unchanged from M1. */
+  readonly row: LotRow;
   readonly xIn: number;
   readonly stalls: number;
 }
 const ROWS: readonly Row[] = [
-  { cls: 'sedan', xIn: 60, stalls: facility.readySlots.sedan },
-  { cls: 'suv', xIn: 38, stalls: facility.readySlots.suv },
-  { cls: 'ev', xIn: 16, stalls: facility.readySlots.ev },
+  { row: 'cars', xIn: 60, stalls: facility.readySlots.cars },
+  { row: 'large', xIn: 38, stalls: facility.readySlots.large },
+  { row: 'ev', xIn: 16, stalls: facility.readySlots.ev },
 ];
 const STALL_PITCH = 3.2;
 const STALL_Z0 = 99;
@@ -331,7 +334,7 @@ ROWS.forEach((row, r) => {
     const pk = node(`pk${String(r)}_${String(k)}`, row.xIn - 9, stallZ(k));
     const park = edge(`slot${String(r)}_${String(k)}`, ak, pk, { speed: SPEED.stall, width: 2.4 });
     edge(`slotx${String(r)}_${String(k)}`, pk, bk, { speed: SPEED.stall, width: 2.4 });
-    slotUnits.push({ id: `${row.cls}-${String(k + 1).padStart(2, '0')}`, parkEdge: park, tag: row.cls });
+    slotUnits.push({ id: `${row.row}-${String(k + 1).padStart(2, '0')}`, parkEdge: park, tag: row.row });
     if (k + 1 < row.stalls) {
       edge(`a${String(r)}_${String(k)}`, ak, a[k + 1] as Point, { speed: SPEED.lot });
       edge(`b${String(r)}_${String(k)}`, bk, b[k + 1] as Point, { speed: SPEED.lot });
@@ -412,15 +415,7 @@ export const hub: HubLayout = {
   serviceLoop,
   walkway: {
     doorEdge,
-    routes: {
-      ev: [doorEdge],
-      suv: [doorEdge, walk1],
-      minivan: [doorEdge, walk1],
-      pickup: [doorEdge, walk1],
-      sedan: [doorEdge, walk1, walk2],
-      economy: [doorEdge, walk1, walk2],
-      luxury: [doorEdge, walk1, walk2],
-    },
+    routes: { ev: [doorEdge], large: [doorEdge, walk1], cars: [doorEdge, walk1, walk2] },
   },
   buildings: [
     { id: 'terminal', label: 'Terminal & GoldLane Express counter', x: -65, z: 122, width: 50, depth: 55, height: 12 },

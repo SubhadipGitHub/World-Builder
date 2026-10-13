@@ -277,7 +277,8 @@ describe('Dashboard modes (J5)', () => {
     const props = setup(share({ helpOpen: true, copyFallback: 'https://x/?area=lot', notice: 'Link copied' }));
     expect(screen.getByRole('dialog', { name: 'Help' })).toBeTruthy();
     expect(screen.getByRole('dialog', { name: 'Copy this link' })).toBeTruthy();
-    expect(screen.getByRole('status').textContent).toBe('Link copied');
+    // M9: the toast warnings region is also role="status"; the notice is the one with class "notice".
+    expect(screen.getAllByRole('status').find((el) => el.classList.contains('notice'))?.textContent).toBe('Link copied');
     fireEvent.click(screen.getByRole('button', { name: 'Close help' }));
     expect(props.shareActions.onCloseHelp).toHaveBeenCalledTimes(1);
   });

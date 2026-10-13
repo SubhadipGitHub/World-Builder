@@ -1,4 +1,4 @@
-import { notImplemented } from '../shared/notImplemented';
+import { FLEET_CLASSES, LOT_ROWS, type LotRow } from '../config/fleet';
 import type { TrackerStage, VehicleState } from '../sim/lifecycle';
 import type { AgentKind, VehicleClass } from '../sim/types';
 
@@ -71,19 +71,9 @@ export function stageLabel(stage: TrackerStage): string {
   return STAGES[stage];
 }
 
-const CLASSES: Readonly<Record<VehicleClass, string>> = {
-  ev: 'Compact EV crossover',
-  suv: 'Full-size SUV',
-  sedan: 'Mid-size sedan',
-  economy: 'Economy hatchback',
-  luxury: 'Premium saloon',
-  minivan: '7-seat minivan',
-  pickup: 'Crew-cab pickup',
-};
-
-/** Brand-neutral model names (N-7), e.g. 'ev' → "Compact EV crossover". */
+/** Brand-neutral model names (N-7, FE-2), e.g. 'ev' → "Compact EV crossover". */
 export function classLabel(cls: VehicleClass): string {
-  return CLASSES[cls];
+  return FLEET_CLASSES[cls].label;
 }
 
 const KINDS: Readonly<Record<AgentKind, string>> = {
@@ -109,24 +99,31 @@ const UNIT_PREFIXES: readonly [RegExp, string][] = [
   [/^gate(\d+)$/, 'Exit gate'],
 ];
 
-/** Unit ids to labels: "wash2" → "Wash bay 2", "charger3" → "EV charger 3", "ev-04" → "Ready slot EV-04". */
+/** Unit ids to labels: "wash2" → "Wash bay 2", "charger3" → "EV charger 3", "cars-04" → "Cars row · stall 4" (FE-3). */
 export function unitLabel(unitId: string): string {
   for (const [pattern, label] of UNIT_PREFIXES) {
     const m = pattern.exec(unitId);
     if (m?.[1]) return `${label} ${m[1]}`;
   }
   if (/^towbay\d*$/.test(unitId)) return 'Tow bay';
-  const slot = /^(ev|suv|sedan)-(\d+)$/.exec(unitId);
-  if (slot?.[1] && slot[2]) return `Ready slot ${slot[1].toUpperCase()}-${slot[2]}`;
+  const slot = /^(cars|large|ev)-(\d+)$/.exec(unitId);
+  if (slot?.[1] && slot[2]) return `${LOT_ROWS[slot[1] as LotRow].label} row · stall ${String(Number(slot[2]))}`;
   return unitId;
 }
 
 /** US$ with thousands separators and no cents (FE-8), e.g. 18420 → "$18,420". */
 export function formatMoney(usd: number): string {
-  return notImplemented(usd);
+  return `$${Math.round(usd).toLocaleString('en-US')}`;
 }
 
 /** Short signed US$ for deltas (FE-8), e.g. −2140 → "−$2.1k", 640 → "+$640". */
 export function formatMoneyShort(usd: number): string {
-  return notImplemented(usd);
+  const sign = usd < 0 ? '−' : '+';
+  const a = Math.abs(usd);
+  return a < 1_000 ? `${sign}$${String(Math.round(a))}` : `${sign}$${(a / 1_000).toFixed(1)}k`;
+}
+
+/** Daily rate, e.g. 84 → "$84/day" (FE-9). */
+export function formatRate(usdPerDay: number): string {
+  return `${formatMoney(usdPerDay)}/day`;
 }

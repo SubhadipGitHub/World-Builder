@@ -22,10 +22,13 @@ import { createRng } from '../sim/rng';
 import type { Vec2 } from '../sim/types';
 import { assemble, paint, place } from './kit/assemble';
 import { blob, cylinder, roundedBox } from './kit/shapes';
+import { patchFoliageSway, type FoliageSway } from './foliageSway';
 import type { Palette } from './palette';
 
 export interface Landscape {
   readonly group: Group;
+  /** Wind sway on trees, palms and bushes (M9, FE-13). */
+  readonly sway: FoliageSway;
   setConditions(wetness: number): void;
   setPalette(palette: Palette): void;
 }
@@ -275,6 +278,7 @@ export function buildLandscape(palette: Palette): Landscape {
   }
 
   const trees = plant();
+  const sway = patchFoliageSway([mats.foliage]);
   group.add(
     ground,
     ...meshes,
@@ -297,6 +301,7 @@ export function buildLandscape(palette: Palette): Landscape {
 
   return {
     group,
+    sway,
     setConditions(wetness) {
       wet = wetness;
       apply();

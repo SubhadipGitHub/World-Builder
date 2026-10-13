@@ -3,7 +3,7 @@ import { brand } from '../../config/brand';
 import { dimensions } from '../../config/facility';
 import { assemble, paint, place } from '../kit/assemble';
 import { cylinder, roundedBox, slab } from '../kit/shapes';
-import { notImplemented } from '../../shared/notImplemented';
+import type { VehicleClass } from '../../sim/types';
 import type { Palette } from '../palette';
 
 export type VehicleAssetKind = 'economy' | 'sedan' | 'luxury' | 'suv' | 'minivan' | 'pickup' | 'ev' | 'shuttle' | 'tow' | 'van' | 'cart';
@@ -66,18 +66,37 @@ interface CarShape {
   readonly cabinX: number;
   readonly roofRails: boolean;
   readonly lightBar: boolean;
+  /** M9 (FE-10): bright beltline trim (premium saloon). */
+  readonly chrome?: boolean;
+  /** M9: sliding-door line on both sides (minivan). */
+  readonly slidingDoor?: boolean;
+  /** M9: open load bed behind the cab, with a tailgate (pickup). */
+  readonly bed?: boolean;
 }
 
-const CARS: Readonly<Record<'sedan' | 'suv' | 'ev', CarShape>> = {
+const CARS: Readonly<Record<VehicleClass, CarShape>> = {
+  // Short two-box hatch: the cabin runs almost to the steep tail (M9).
+  economy: { wheel: 0.32, clearance: 0.2, bodyH: 0.58, cabinL: 0.56, cabinH: 0.55, cabinX: -0.12, roofRails: false, lightBar: false },
   // Low three-box saloon.
   sedan: { wheel: 0.34, clearance: 0.22, bodyH: 0.55, cabinL: 0.5, cabinH: 0.48, cabinX: -0.04, roofRails: false, lightBar: false },
+  // Long, low and sleek, with a bright beltline (M9).
+  luxury: { wheel: 0.36, clearance: 0.2, bodyH: 0.52, cabinL: 0.42, cabinH: 0.44, cabinX: -0.06, roofRails: false, lightBar: false, chrome: true },
   // Tall and boxy, with roof rails.
   suv: { wheel: 0.42, clearance: 0.3, bodyH: 0.75, cabinL: 0.62, cabinH: 0.58, cabinX: -0.07, roofRails: true, lightBar: false },
+  // Tall, rounded people-carrier with a long glasshouse and sliding doors (M9).
+  minivan: { wheel: 0.36, clearance: 0.22, bodyH: 0.8, cabinL: 0.8, cabinH: 0.78, cabinX: -0.04, roofRails: false, lightBar: false, slidingDoor: true },
+  // Crew cab over the front half, open bed behind (M9).
+  pickup: { wheel: 0.42, clearance: 0.32, bodyH: 0.7, cabinL: 0.38, cabinH: 0.62, cabinX: 0.12, roofRails: false, lightBar: false, bed: true },
   // Smooth crossover with a long glass cabin and a front light bar.
   ev: { wheel: 0.38, clearance: 0.24, bodyH: 0.62, cabinL: 0.6, cabinH: 0.52, cabinX: -0.02, roofRails: false, lightBar: true },
 };
 
-function car(kind: 'sedan' | 'suv' | 'ev', palette: Palette): VehicleAsset {
+/** Dark bed liner and door shut lines (M9). */
+const LINER = '#2A2D33';
+/** Beltline trim on the premium saloon (M9). */
+const CHROME = '#E6E9EE';
+
+function car(kind: VehicleClass, palette: Palette): VehicleAsset {
   const { length: l, width: w } = dimensions[kind];
   const s = CARS[kind];
   const paintParts: Parts = [];
@@ -105,6 +124,23 @@ function car(kind: 'sedan' | 'suv' | 'ev', palette: Palette): VehicleAsset {
     const side = sz * (bodyW / 2 + 0.006);
     trim.push(place(paint(slab(l * 0.62, 0.07, 0.012), LIVERY), { x: -l * 0.02, y: s.clearance + s.bodyH * 0.55, z: side }));
     trim.push(place(paint(slab(0.3, 0.16, 0.012), LIVERY), { x: l * 0.1, y: s.clearance + s.bodyH * 0.55 + 0.16, z: side }));
+  }
+  if (s.chrome) {
+    for (const sz of [1, -1]) trim.push(place(paint(slab(l * 0.8, 0.04, 0.012), CHROME), { x: 0, y: bodyTop - 0.05, z: sz * (bodyW / 2 + 0.008) }));
+  }
+  if (s.slidingDoor) {
+    // The sliding door's rail and its rear shut line, behind the front door.
+    for (const sz of [1, -1]) {
+      const side = sz * (bodyW / 2 + 0.008);
+      trim.push(place(paint(slab(l * 0.3, 0.025, 0.012), LINER), { x: -l * 0.08, y: bodyTop + s.cabinH * 0.35, z: side }));
+      trim.push(place(paint(slab(0.025, s.bodyH * 0.9, 0.012), LINER), { x: -l * 0.24, y: s.clearance + s.bodyH * 0.5, z: side }));
+    }
+  }
+  if (s.bed) {
+    // Open bed: a dark liner set into the rear deck, plus a tailgate line, so it reads as open from above.
+    const bedL = l * 0.42;
+    trim.push(box(bedL, 0.03, bodyW * 0.84, 0.01, LINER, -l / 2 + bedL / 2 + 0.2, bodyTop + 0.005));
+    trim.push(place(paint(slab(0.012, 0.04, bodyW * 0.8), LINER), { x: -l / 2 + 0.17, y: bodyTop - 0.18, z: 0 }));
   }
   wheels(trim, l, w, s.wheel, l * 0.2);
   lights(lamps, l, w, bodyTop - 0.16, bodyW / 2 - 0.26, s.lightBar);
@@ -178,8 +214,12 @@ function cart(palette: Palette): VehicleAsset {
 
 export function vehicleAsset(kind: VehicleAssetKind, palette: Palette): VehicleAsset {
   switch (kind) {
+    case 'economy':
     case 'sedan':
+    case 'luxury':
     case 'suv':
+    case 'minivan':
+    case 'pickup':
     case 'ev':
       return car(kind, palette);
     case 'shuttle':
@@ -190,11 +230,5 @@ export function vehicleAsset(kind: VehicleAssetKind, palette: Palette): VehicleA
       return van(palette);
     case 'cart':
       return cart(palette);
-    // Stage 3 placeholders (M9, FE-10): economy and luxury via car(), minivan() and pickup() builders.
-    case 'economy':
-    case 'luxury':
-    case 'minivan':
-    case 'pickup':
-      return notImplemented(kind, palette);
   }
 }

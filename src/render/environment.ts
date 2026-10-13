@@ -1,5 +1,5 @@
 import type { WeatherMode } from '../config/weather';
-import type { Wind } from './wind';
+import { windAt, type Wind } from './wind';
 
 export type DayNight = 'auto' | 'day' | 'night';
 
@@ -45,6 +45,14 @@ export interface EnvironmentOptions {
 }
 
 const SUNRISE = 6;
+
+/** Morning ground mist (FE-11): rises 04:30–05:30, lies until 08:30 and lifts by 09:30; clear and overcast only. */
+function mistAt(h: number): number {
+  if (h < 4.5 || h >= 9.5) return 0;
+  if (h < 5.5) return h - 4.5;
+  if (h <= 8.5) return 1;
+  return 9.5 - h;
+}
 const SUNSET = 19;
 const clamp01 = (v: number): number => Math.min(1, Math.max(0, v));
 
@@ -62,10 +70,10 @@ interface WeatherLight {
 const WEATHER_LIGHT: Readonly<Record<WeatherMode, WeatherLight>> = {
   clear: { sun: 1, ambient: 1, fog: 0 },
   overcast: { sun: 0.45, ambient: 1.1, fog: 0.0007 },
-  // Stage 3 (M9): fog and storm borrow overcast and rain lighting until Stage 4 tunes them (FE-11, FE-12).
-  fog: { sun: 0.45, ambient: 1.1, fog: 0.0007 },
+  // M9 (FE-11): dense, light-grey fog; FE-12: a storm is darker than rain, with a little more haze.
+  fog: { sun: 0.35, ambient: 1.1, fog: 0.006 },
   rain: { sun: 0.3, ambient: 0.9, fog: 0.0015 },
-  storm: { sun: 0.3, ambient: 0.9, fog: 0.0015 },
+  storm: { sun: 0.18, ambient: 0.75, fog: 0.002 },
   heatwave: { sun: 1.25, ambient: 1, fog: 0.0004 },
 };
 
@@ -81,6 +89,7 @@ export function environmentFor(weather: WeatherMode, clockHours: number, dayNigh
   const w = WEATHER_LIGHT[weather];
   const day = 1 - nightFactor;
   const heat = weather === 'heatwave';
+  const wet = weather === 'rain' || weather === 'storm';
   return {
     hours,
     nightFactor,
@@ -89,16 +98,16 @@ export function environmentFor(weather: WeatherMode, clockHours: number, dayNigh
     sunIntensity: 2.6 * w.sun * day + 0.45 * nightFactor,
     ambientIntensity: 1.6 * w.ambient * day + 0.8 * nightFactor,
     fogDensity: w.fog,
-    wetness: weather === 'rain' ? 1 : 0,
-    rain: weather === 'rain',
+    // Fog leaves the asphalt damp, not wet (no puddles or splashes).
+    wetness: wet ? 1 : weather === 'fog' ? 0.3 : 0,
+    rain: wet,
     heat,
     shimmer: heat && !options.reducedMotion && options.qualityTier === 0,
-    // Stage 3 placeholders (M9, FE-11…FE-13).
-    fog: false,
-    storm: false,
-    mist: 0,
-    wind: { dirRad: 0, strength: 0, gust: 0 },
-    flash: 0,
-    headlightsByDay: false,
+    fog: weather === 'fog',
+    storm: weather === 'storm',
+    mist: dayNight === 'auto' && (weather === 'clear' || weather === 'overcast') ? mistAt(hours) : 0,
+    wind: windAt(hours, weather, options.tSec ?? 0),
+    flash: weather === 'storm' ? clamp01(options.flash ?? 0) : 0,
+    headlightsByDay: weather === 'fog',
   };
 }

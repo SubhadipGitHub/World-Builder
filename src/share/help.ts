@@ -19,6 +19,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { keys: 'Pinch', action: 'Zoom and rotate on a touch screen' },
   { keys: 'Click', action: 'Select a car, person or bay, and follow it' },
   { keys: 'Esc', action: 'Leave the tour, close a dialog, or clear the selection', key: 'Escape' },
+  { keys: 'M', action: 'Turn sound on or off (or use the speaker button)', key: 'm' },
 ];
 
 /** The five shown in the quick-help popover. */

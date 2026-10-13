@@ -22,7 +22,12 @@ const GOLDEN: Palette3 = { zenith: '#5B78B6', horizon: '#FFAE66', ground: '#A08A
 const NIGHT: Palette3 = { zenith: '#050916', horizon: '#18223D', ground: '#0A0C12' };
 const HEAT_HORIZON = '#F5C185';
 /** How far rain and overcast pull the sky towards grey. */
-const GREY: Partial<Record<WeatherMode, number>> = { rain: 0.75, overcast: 0.55 };
+const GREY: Partial<Record<WeatherMode, number>> = { rain: 0.75, overcast: 0.55, fog: 0.9, storm: 0.85 };
+/** Storm skies are darker as well as greyer (FE-12). */
+const STORM_DARK = new Color('#2A2F3A');
+/** Lightning brightens the sky by at most 35% (F12). */
+const FLASH_SKY = 0.35;
+const FLASH_COLOUR = new Color('#E8EEFF');
 
 /** 1 at golden hour (around 06:30 and 18:30), fading to 0 an hour and a half either side. */
 const goldenAt = (hours: number): number => Math.max(0, 1 - Math.min(Math.abs(hours - 18.5), Math.abs(hours - 6.5)) / 1.5);
@@ -44,7 +49,9 @@ export function skyColours(env: Environment, weather: WeatherMode): SkyColours {
     const c = new Color(DAY[key]).lerp(new Color(GOLDEN[key]), golden);
     if (weather === 'heatwave' && key === 'horizon') c.lerp(new Color(HEAT_HORIZON), 0.55);
     towardsGrey(c, grey);
+    if (weather === 'storm') c.lerp(STORM_DARK, 0.45);
     c.lerp(new Color(NIGHT[key]), night);
+    if (env.flash > 0) c.lerp(FLASH_COLOUR, FLASH_SKY * Math.min(1, env.flash / 0.6));
     return `#${c.getHexString()}`;
   };
   return { zenith: mix('zenith'), horizon: mix('horizon'), ground: mix('ground') };

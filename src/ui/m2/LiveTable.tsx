@@ -31,7 +31,7 @@ interface Table {
  * Columns:
  *  - Active fleet: Vehicle, Model, Status, Battery / fuel, Location
  *  - Queue: Bay, Vehicle, Service, Remaining
- *  - Checkout log: Time, Agreement, Vehicle, Tier, Gate
+ *  - Checkout log: Time, Agreement, Vehicle, Class, Rate, Tier, Gate (Class and Rate: M9, FE-9)
  */
 export function LiveTable({ fleet, queue, checkouts, onSelect, clockAt }: LiveTableProps): JSX.Element {
   const [tab, setTab] = useState<Tab>('fleet');
@@ -48,11 +48,11 @@ export function LiveTable({ fleet, queue, checkouts, onSelect, clockAt }: LiveTa
             rows: queue.map((r) => ({ key: r.unitId, vehicleId: r.vehicleId, cells: [r.bay, r.vehicleId, r.service, r.remaining] })),
           }
         : {
-            headers: ['Time', 'Agreement', 'Vehicle', 'Tier', 'Gate'],
+            headers: ['Time', 'Agreement', 'Vehicle', 'Class', 'Rate', 'Tier', 'Gate'],
             rows: checkouts.map((r) => ({
               key: r.agreementNo,
               vehicleId: r.vehicleId,
-              cells: [clockAt(r.simTimeSec), r.agreementNo, r.vehicleId, r.tier, r.gate],
+              cells: [clockAt(r.simTimeSec), r.agreementNo, r.vehicleId, r.model, r.rate, r.tier, r.gate],
             })),
           };
 

@@ -14,6 +14,7 @@ const KPIS: readonly (readonly [string, string])[] = [
   ['Turnaround time', 'Average minutes from a car being returned to it standing ready in the lot, over the last two hub hours.'],
   ['Fleet utilisation', 'Share of the fleet out on rent right now.'],
   ['EV state of charge', 'Average charge of the electric cars waiting in the ready lot.'],
+  ['Revenue today', 'Rental income booked since hub midnight, at each booked class’s daily rate. “At risk” is what customers waiting over 20 minutes at the counter would pay.'],
 ];
 
 const LEGEND: readonly (readonly [string, string])[] = [
@@ -70,6 +71,11 @@ function HelpBody(props: HelpDialogProps): JSX.Element {
             </div>
           ))}
         </dl>
+        <h3>Sound and pop-up alerts</h3>
+        <p>
+          Sound starts off. The speaker button or <kbd>M</kbd> turns it on; the volume is in the user menu. Warnings and critical alerts also pop up at the top
+          right (click one to go to it); “Pop-up alerts” in the user menu turns them off.
+        </p>
         <h3>Speed and what-if</h3>
         <p>
           The speed buttons run the hub clock at 15×, 30× or 45× real time, or pause it. What-if scenarios close units, change crews or add a demand surge, and

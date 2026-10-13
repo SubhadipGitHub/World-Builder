@@ -1,7 +1,7 @@
 {
   "name": "goldlane-hub",
   "private": true,
-  "version": "0.8.0",
+  "version": "0.9.0",
   "license": "MIT",
   "description": "GoldLane Hub: Pacific Gateway Fleet Ops - a living 3D fleet-operations world in one HTML file",
   "type": "module",

@@ -1,4 +1,4 @@
-import { notImplemented } from '../shared/notImplemented';
+import { createRng } from '../sim/rng';
 
 // Lightning (M9, FE-12, architecture F11, F12). Pure and deterministic per seed; photosensitivity limits live here.
 
@@ -32,7 +32,36 @@ export interface LightningSchedule {
 }
 
 export function createLightningSchedule(seed: string): LightningSchedule {
-  return notImplemented(seed);
+  const rng = createRng(`lightning:${seed}`);
+  const strikes: Strike[] = [];
+  // The first strike comes within 10 s, so a storm announces itself quickly.
+  let next = rng.range(2, 10);
+  const extendTo = (t: number): void => {
+    while (next <= t) {
+      strikes.push({
+        t: next,
+        seed: rng.int(0, 0x7fffffff),
+        distanceM: rng.range(400, 1_500),
+        thunderDelaySec: rng.range(1, 4),
+        azimuthRad: rng.range(0, 2 * Math.PI),
+      });
+      next += rng.range(MIN_STRIKE_GAP_SEC, MAX_STRIKE_GAP_SEC);
+    }
+  };
+  return {
+    strikesBetween(t0, t1) {
+      extendTo(t1);
+      return strikes.filter((s) => s.t > t0 && s.t <= t1);
+    },
+    last(t) {
+      extendTo(t);
+      for (let i = strikes.length - 1; i >= 0; i--) {
+        const s = strikes[i] as Strike;
+        if (s.t <= t) return s;
+      }
+      return null;
+    },
+  };
 }
 
 export interface Flash {
@@ -44,7 +73,29 @@ export interface Flash {
   readonly bolt: boolean;
 }
 
+const DARK: Flash = { light: 0, sky: 0, bolt: false };
+/** Second pulse after the first: 2.5 Hz, under the 3 Hz ceiling. */
+const PULSE_GAP_SEC = 0.4;
+const RISE_SEC = 0.08;
+const DECAY_SEC = 0.09;
+/** Everything is dark again after this. */
+const FLASH_END_SEC = 1.5;
+const BOLT_SEC = 0.25;
+
+/** One pulse: a fast linear rise, then an exponential decay. */
+const pulse = (x: number): number => (x < 0 ? 0 : x < RISE_SEC ? x / RISE_SEC : Math.exp(-(x - RISE_SEC) / DECAY_SEC));
+
 /** Flash envelope at time t for the latest strike: ≤ 2 pulses 400 ms apart, capped; one soft pulse with reduced motion. */
 export function flashLevel(t: number, strike: Strike | null, opts: { readonly reducedMotion: boolean }): Flash {
-  return notImplemented(t, strike, opts);
+  if (!strike) return DARK;
+  const dt = t - strike.t;
+  if (opts.reducedMotion) {
+    // One slow bump: 0.5 s up, 0.5 s down, no bolt and no flicker.
+    if (dt < 0 || dt > 1) return DARK;
+    const light = REDUCED_FLASH_LIGHT * Math.sin(Math.PI * dt);
+    return { light, sky: light / MAX_FLASH_LIGHT, bolt: false };
+  }
+  if (dt < 0 || dt > FLASH_END_SEC) return DARK;
+  const level = Math.min(1, pulse(dt) + 0.6 * pulse(dt - PULSE_GAP_SEC));
+  return { light: MAX_FLASH_LIGHT * level, sky: level, bolt: dt < BOLT_SEC };
 }

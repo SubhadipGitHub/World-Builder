@@ -28,6 +28,10 @@ const NIGHT_SUN = new Color('#9FB4FF');
 const DAY_SUN = new Color('#FFF4E2');
 const HEAT_SUN = new Color('#FFD39A');
 const NIGHT_HEMI = new Color('#2A3550');
+/** Lightning tint (FE-12). */
+const FLASH_HEMI = new Color('#DCE6FF');
+/** Extra fog density at full morning mist (FE-11). */
+const MIST_FOG = 0.0035;
 
 export function createAtmosphere(parts: Parts, palette: Palette): Atmosphere {
   const { renderer, scene, hemi, sun, world, agents, rain } = parts;
@@ -54,13 +58,15 @@ export function createAtmosphere(parts: Parts, palette: Palette): Atmosphere {
       sun.intensity = env.sunIntensity;
       sun.color.copy(env.heat ? HEAT_SUN : DAY_SUN).lerp(NIGHT_SUN, nf);
 
-      hemi.intensity = env.ambientIntensity;
-      hemi.color.copy(skyBase).lerp(NIGHT_HEMI, nf);
+      // A lightning flash lifts the ambient light (capped in render/lightning, F12).
+      hemi.intensity = env.ambientIntensity + 2.5 * env.flash;
+      hemi.color.copy(skyBase).lerp(NIGHT_HEMI, nf).lerp(FLASH_HEMI, Math.min(1, env.flash * 1.5));
 
-      if (env.fogDensity > 0) {
-        fogColour.set(env.rain ? '#7D8594' : env.heat ? '#C9B79A' : '#A8ADB8').lerp(NIGHT_SKY, nf);
+      const density = env.fogDensity + MIST_FOG * env.mist;
+      if (density > 0) {
+        fogColour.set(env.fog ? '#C3C7CE' : env.rain ? '#7D8594' : env.heat ? '#C9B79A' : '#A8ADB8').lerp(NIGHT_SKY, nf * (env.fog ? 0.7 : 1));
         fog.color.copy(fogColour);
-        fog.density = env.fogDensity;
+        fog.density = density;
         scene.fog = fog;
       } else {
         scene.fog = null;
@@ -68,8 +74,9 @@ export function createAtmosphere(parts: Parts, palette: Palette): Atmosphere {
 
       renderer.toneMappingExposure = env.heat ? 1.08 : 1;
       world.setConditions({ wetness: env.wetness, night: nf });
-      agents.setNight(nf);
-      rain.update(env.rain, dt, around, env.wetness);
+      // Fog (FE-11): headlights on in daytime too.
+      agents.setNight(env.headlightsByDay ? Math.max(nf, 0.7) : nf);
+      rain.update(env.rain, dt, around, env.storm ? 1.3 : env.wetness, env.wind);
     },
     setPalette(p) {
       base = p;

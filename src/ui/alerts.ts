@@ -1,7 +1,8 @@
 import type { SimEvent } from '../sim/events';
 import type { ScenarioEvent } from '../sim/scenario';
 import type { Snapshot } from '../sim/world';
-import { unitLabel } from './format';
+import { FLEET_CLASSES, energyOf } from '../config/fleet';
+import { classLabel, formatMiles, unitLabel } from './format';
 import { CREW_LABEL, LEVEL_LABEL } from './scenario';
 
 export type AlertSeverity = 'info' | 'warning' | 'critical';
@@ -24,7 +25,8 @@ export interface Alert {
 
 /**
  * Alerts from the simulation (D-8), newest first, capped at `max`:
- *  - maintenanceFlagged → warning "Maintenance: <reason> on <id>"; severe → critical "Severe damage on <id> — tow requested"
+ *  - maintenanceFlagged → warning "Maintenance: <reason> on <id>"; severe → critical "Severe damage on <id> — tow requested";
+ *    scheduled service (M9) → warning "<id> · <model> · scheduled service (<interval>)"
  *  - towDispatched → info "Tow truck dispatched for <id>"
  *  - queueOverflow → warning "<Station> queue at <n> cars" (e.g. "Wash queue at 7 cars")
  *  - an EV staged below the SoC threshold (snapshot check, once per vehicle per stay) → warning "<id> staged at <n>% charge"
@@ -35,10 +37,13 @@ export interface Alert {
 export interface AlertFeed {
   /** Returns the alerts this call created, oldest first (M9: fed to the toasts). */
   ingest(events: readonly SimEvent[]): readonly Alert[];
-  observeSnapshot(snapshot: Snapshot, socThresholdPct: number): void;
+  /** Returns the alerts this call created (M9: low-charge warnings also pop up). */
+  observeSnapshot(snapshot: Snapshot, socThresholdPct: number): readonly Alert[];
   list(): readonly Alert[];
   unread(): number;
   markAllRead(): void;
+  /** Marks one alert read (M9: clicking its toast). */
+  markRead(id: string): void;
 }
 
 const STATIONS: Readonly<Record<string, string>> = {
@@ -75,19 +80,28 @@ export function createAlertFeed(max = 50): AlertFeed {
   let unread = 0;
   let counter = 0;
   const lowEvs = new Set<string>();
+  /** Collects the alerts created during one ingest() call (M9: the toasts' feed). */
+  let sink: Alert[] | null = null;
 
   const push = (severity: AlertSeverity, kind: AlertKind, message: string, vehicleId: string | null, simTimeSec: number, unitId: string | null = null): void => {
-    alerts.unshift({ id: `alert-${String(++counter)}`, severity, kind, message, vehicleId, unitId, simTimeSec });
+    const alert: Alert = { id: `alert-${String(++counter)}`, severity, kind, message, vehicleId, unitId, simTimeSec };
+    alerts.unshift(alert);
+    sink?.push(alert);
     if (alerts.length > max) alerts = alerts.slice(0, max);
     unread++;
   };
 
   return {
     ingest(events) {
+      const created: Alert[] = [];
+      sink = created;
       for (const e of events) {
         switch (e.type) {
           case 'maintenanceFlagged':
-            if (e.severe) push('critical', 'maintenance', `Severe damage on ${e.vehicleId} — tow requested`, e.vehicleId, e.simTimeSec);
+            if (e.reason === 'interval') {
+              const interval = formatMiles(FLEET_CLASSES[e.cls].serviceIntervalMi);
+              push('warning', 'service', `${e.vehicleId} · ${classLabel(e.cls)} · scheduled service (${interval})`, e.vehicleId, e.simTimeSec);
+            } else if (e.severe) push('critical', 'maintenance', `Severe damage on ${e.vehicleId} — tow requested`, e.vehicleId, e.simTimeSec);
             else push('warning', 'maintenance', `Maintenance: ${e.reason} on ${e.vehicleId}`, e.vehicleId, e.simTimeSec);
             break;
           case 'towDispatched':
@@ -105,22 +119,32 @@ export function createAlertFeed(max = 50): AlertFeed {
             break;
         }
       }
-      return []; // Stage 3 placeholder (M9): Stage 4 returns the alerts created by this call.
+      sink = null;
+      return created;
     },
     observeSnapshot(snapshot, threshold) {
+      const created: Alert[] = [];
+      sink = created;
       const lowNow = new Set<string>();
       for (const a of snapshot.agents) {
-        if (a.kind !== 'fleet' || a.cls !== 'ev' || a.state !== 'staged' || a.socPct === null || a.socPct >= threshold) continue;
+        if (a.kind !== 'fleet' || a.cls === null || energyOf(a.cls) !== 'electric' || a.state !== 'staged' || a.socPct === null || a.socPct >= threshold) continue;
         lowNow.add(a.id);
         if (!lowEvs.has(a.id)) push('warning', 'lowSoc', `${a.id} staged at ${String(Math.round(a.socPct))}% charge`, a.id, snapshot.simTimeSec);
       }
       lowEvs.clear();
       for (const id of lowNow) lowEvs.add(id);
+      sink = null;
+      return created;
     },
     list: () => alerts,
     unread: () => Math.min(unread, alerts.length),
     markAllRead() {
       unread = 0;
+    },
+    markRead(id) {
+      // Unread alerts are the newest `unread` ones (the list is newest first).
+      const i = alerts.findIndex((a) => a.id === id);
+      if (i >= 0 && i < unread) unread--;
     },
   };
 }

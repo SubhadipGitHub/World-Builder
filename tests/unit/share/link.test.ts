@@ -159,7 +159,7 @@ describe('formatLink (SH-7, J4)', () => {
                 elevationDeg: round(rng.range(90 - toDeg(limits.maxPolar) + 0.1, 90 - toDeg(limits.minPolar) - 0.1)),
                 distance: round(rng.range(limits.minDistance, limits.maxDistance)),
               },
-        weather: pick(['clear', 'overcast', 'rain', 'heatwave'] as const),
+        weather: pick(['clear', 'overcast', 'fog', 'rain', 'storm', 'heatwave'] as const),
         tod: pick(['auto', 'day', 'night'] as const),
         speed: pick([0, 15, 30, 45] as const),
         labels: pick([null, true, false] as const),
@@ -167,7 +167,8 @@ describe('formatLink (SH-7, J4)', () => {
         quality: pick(['auto', 0, 1, 2] as const),
         seed: pick(['goldlane', 'a', 'Demo_2-x', 'z'.repeat(32)]),
         preset: pick([null, ...presets.map((p) => p.id)]),
-        select: pick([null, 'wash1', 'charger8', 'terminal', 'sedan-01']),
+        // M9 (FE-3): stalls are named by row ('cars-01', was 'sedan-01').
+        select: pick([null, 'wash1', 'charger8', 'terminal', 'cars-01']),
         kiosk: rng.next() < 0.5,
         embed: rng.next() < 0.5,
       };

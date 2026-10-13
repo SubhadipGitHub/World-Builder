@@ -4,6 +4,27 @@ All notable changes to GoldLane Hub, one entry per milestone. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 The full specification for each milestone is in `docs/requirements.md` and `docs/architecture.md`.
 
+## [0.9.0] - 2026-10-13
+
+M9: fleet economics, sound, weather effects and notifications (requirements §14).
+
+### Added
+- Four new rental classes: economy hatchback, premium saloon, 7-seat minivan and crew-cab pickup, each with
+  its own model, daily rate and service interval. Seven classes in all, still 120 cars.
+- Mileage-based maintenance: a car is flagged for scheduled service once it reaches its class interval.
+- A "Revenue today" KPI card with the revenue at risk from customers waiting at the counter, and its
+  what-if delta against the baseline. Rates and service status in the detail panel; class and rate in the
+  checkout log.
+- Fog and Thunderstorm weather, morning mist, lightning (photosensitivity-safe), wind that sways trees and
+  flags and slants the rain, a windsock, fog halos around lights, and ambient particles (exhaust from petrol
+  cars, wash spray, puddle splashes, jet exhaust, leaves and dust).
+- A procedural soundscape (no audio files), muted by default: the speaker button or `M`, with a volume slider.
+- Pop-up alerts for warnings and critical alerts, with a "Pop-up alerts" switch.
+
+### Changed
+- The ready lot's rows are Cars, SUVs & vans, and EV; stalls are named by row (e.g. "Cars row · stall 4").
+- KPI cards wrap 2 × 2 on a phone.
+
 ## [0.8.0] - 2026-10-13
 
 M8: ship and share (requirements §13).

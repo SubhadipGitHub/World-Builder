@@ -15,7 +15,7 @@ import {
   Vector3,
   type Raycaster,
 } from 'three';
-import type { VehicleClass } from '../sim/types';
+import { FLEET_CLASS_ORDER } from '../config/fleet';
 import type { AgentView } from '../sim/world';
 import { personAsset, walkBob } from './assets/people';
 import { vehicleAsset, type VehicleAssetKind } from './assets/vehicles';
@@ -50,25 +50,23 @@ interface Visual {
 }
 
 const CAPACITY: Readonly<Record<VisualKey, number>> = {
-  sedan: 80,
-  suv: 60,
+  // Most of each class that can be on the map at once (fleet counts per class, F3, with headroom).
+  economy: 40,
+  sedan: 50,
+  luxury: 16,
+  suv: 40,
+  minivan: 16,
+  pickup: 16,
   ev: 70,
-  // M9 classes: meshes are built in Stage 4 (FE-10).
-  economy: 60,
-  luxury: 20,
-  minivan: 20,
-  pickup: 20,
   shuttle: 4,
   cart: 6,
   tow: 2,
   van: 2,
   pedestrian: 60,
 };
-const FLEET_KEYS: ReadonlySet<VisualKey> = new Set(['sedan', 'suv', 'ev']);
+const FLEET_KEYS: ReadonlySet<VisualKey> = new Set(FLEET_CLASS_ORDER);
 
-const FLEET_VISUAL: Readonly<Partial<Record<VehicleClass, VisualKey>>> = { sedan: 'sedan', suv: 'suv', ev: 'ev' };
-const keyOf = (a: AgentView): VisualKey =>
-  a.kind === 'fleet' ? (a.cls ? (FLEET_VISUAL[a.cls] ?? 'sedan') : 'sedan') : a.kind === 'pedestrian' ? 'pedestrian' : a.kind;
+const keyOf = (a: AgentView): VisualKey => (a.kind === 'fleet' ? (a.cls ?? 'sedan') : a.kind === 'pedestrian' ? 'pedestrian' : a.kind);
 
 /** Stable small hash so a car keeps its paint colour and a walker its stride phase. */
 const hash = (id: string): number => {
@@ -130,7 +128,7 @@ export function createAgentLayer(palette: Palette): AgentLayer {
     return mesh;
   };
 
-  for (const key of ['sedan', 'suv', 'ev', 'shuttle', 'tow', 'van', 'cart'] as const) {
+  for (const key of [...FLEET_CLASS_ORDER, 'shuttle', 'tow', 'van', 'cart'] as const) {
     const asset = vehicleAsset(key, palette);
     const paintMesh = pool(key, asset.paint, solid(), true);
     const trimMesh = pool(key, asset.trim, solid(), true);

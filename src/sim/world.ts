@@ -1,5 +1,6 @@
 import { brand, type Tier } from '../config/brand';
 import { dimensions, energy, facility } from '../config/facility';
+import { FLEET_CLASSES, FLEET_CLASS_ORDER, energyOf, fleetCounts, rowOf, type LotRow } from '../config/fleet';
 import { idm, priority, rates as defaultRates } from '../config/rates';
 import { DEPARTURE_BACKLOG_PER_GATE, OUTAGE_KINDS, surge } from '../config/scenarios';
 import { weather as weatherTable, type WeatherMode } from '../config/weather';
@@ -12,7 +13,9 @@ import type { Footprint } from './invariants';
 import { isParkedState, milestoneFor, TRACKER_STAGES, type TrackerStage, type VehicleState } from './lifecycle';
 import { averageReadyEvSoc, averageTurnaroundMin, utilisation, type TurnaroundRecord } from './metrics';
 import { createResourcePool, type ResourcePool } from './resources';
-import { EMPTY_REVENUE, type RevenueView } from './revenue';
+import { matchCar } from './fleetMatch';
+import { initialLastService, milesToService, serviceDue } from './maintenance';
+import { atRisk, bookingValue, createRevenueLedger, type RevenueView } from './revenue';
 import { createRng } from './rng';
 import {
   NORMAL_SCENARIO,
@@ -147,7 +150,8 @@ const AGREEMENT_YEAR = 2026;
 const TURNAROUND_WINDOW_SEC = 2 * 3600;
 const QUEUE_OVERFLOW = 6;
 const SLOT_FALLBACK_SEC = 120;
-const INITIAL_STAGED: Readonly<Record<VehicleClass, number>> = { economy: 0, sedan: 8, luxury: 0, suv: 6, minivan: 0, pickup: 0, ev: 8 };
+/** Cars staged at start, per lot row (M9: rows replace the M1 classes, same counts). */
+const INITIAL_STAGED: Readonly<Record<LotRow, number>> = { cars: 8, large: 6, ev: 8 };
 /** Checkout dwell at the exit gate (R-2; 10–20 s before M7). */
 const GATE_DWELL = { min: 8, max: 15 } as const;
 /** D36: a stopped car (≤ this speed, m/s) within NOSE_TO_TAIL_GAP metres of a queued car ahead counts as queued. */
@@ -190,6 +194,8 @@ interface Vehicle {
   phase: Phase;
   stage: TrackerStage | null;
   odometerMi: number;
+  /** Odometer at the last service (M9, FE-4). */
+  lastServiceMi: number;
   fuelPct: number | null;
   socPct: number | null;
   energyStart: number;
@@ -202,6 +208,8 @@ interface Vehicle {
   customerId: string | null;
   agreementNo: string | null;
   tier: Tier | null;
+  /** Class the matched customer booked; they pay its rate (M9, FE-5). */
+  bookedCls: VehicleClass | null;
   /** Pose while parked at the tow bay, used to blend onto the tow truck. */
   parkedPose: { x: number; z: number; heading: number } | null;
 }
@@ -234,8 +242,11 @@ interface Patrol {
 }
 
 interface Customer {
+  /** The booked class. */
   readonly cls: VehicleClass;
   readonly tier: Tier;
+  /** When they joined the counter queue (M9, D50: revenue at risk). */
+  readonly arrivedAt: number;
 }
 
 const QUEUE_STATES: ReadonlySet<VehicleState> = new Set(['washQueue', 'serviceQueue', 'energyQueue', 'toLot', 'departing', 'arriving']);
@@ -274,6 +285,7 @@ export function createSim(config: SimConfig): Sim {
   let now = -prerollSteps * defaultRates.stepWallSec * timeScale;
   let events: SimEvent[] = [];
   const turnarounds: TurnaroundRecord[] = [];
+  const ledger = createRevenueLedger();
 
   // ---------- stations ----------
 
@@ -371,7 +383,7 @@ export function createSim(config: SimConfig): Sim {
     pending.push({ vehicleId: v.id, station, unitId, edge: unitOf(unitId).parkEdge });
   }
 
-  const energyStation = (v: Vehicle): Station => (v.cls === 'ev' ? 'charger' : 'pump');
+  const energyStation = (v: Vehicle): Station => (energyOf(v.cls) === 'electric' ? 'charger' : 'pump');
 
   /**
    * After wash or service: charge or refuel, unless the queue is long and the car is at least half
@@ -380,7 +392,7 @@ export function createSim(config: SimConfig): Sim {
   function toEnergy(v: Vehicle): void {
     const station = energyStation(v);
     transition(v, 'energyQueue');
-    const level = (v.cls === 'ev' ? v.socPct : v.fuelPct) ?? 0;
+    const level = (energyOf(v.cls) === 'electric' ? v.socPct : v.fuelPct) ?? 0;
     if (shouldChargeLater(level, waitingAt(station))) {
       // Never through a charger, pump or bay lane (a shortcut there blocks behind the occupant).
       const bypass = graph.route(currentEdge(v.id), queueEdge('slot'), 'fleet', unitLanes);
@@ -403,25 +415,19 @@ export function createSim(config: SimConfig): Sim {
 
   // ---------- fleet setup ----------
 
-  const counts: Record<VehicleClass, number> = {
-    ev: Math.round(facility.fleetSize * facility.fleetMix.ev),
-    suv: Math.round(facility.fleetSize * facility.fleetMix.suv),
-    sedan: 0,
-    economy: 0,
-    luxury: 0,
-    minivan: 0,
-    pickup: 0,
-  };
-  counts.sedan = facility.fleetSize - counts.ev - counts.suv;
+  // Exact per-class counts (F3), built in display order and then shuffled.
+  const counts = fleetCounts(facility.fleetSize);
   const classes: VehicleClass[] = [];
-  for (const cls of ['sedan', 'suv', 'ev'] as const) for (let i = 0; i < counts[cls]; i++) classes.push(cls);
+  for (const cls of FLEET_CLASS_ORDER) for (let i = 0; i < counts[cls]; i++) classes.push(cls);
   for (let i = classes.length - 1; i > 0; i--) {
     const j = rng.int(0, i);
     [classes[i], classes[j]] = [classes[j] as VehicleClass, classes[i] as VehicleClass];
   }
 
-  const staged: Record<VehicleClass, number> = { economy: 0, sedan: 0, luxury: 0, suv: 0, minivan: 0, pickup: 0, ev: 0 };
+  const staged: Record<LotRow, number> = { cars: 0, large: 0, ev: 0 };
   for (const cls of classes) {
+    const electric = energyOf(cls) === 'electric';
+    const row = rowOf(cls);
     const v: Vehicle = {
       id: gen.vehicleId(),
       cls,
@@ -430,8 +436,9 @@ export function createSim(config: SimConfig): Sim {
       phase: { kind: 'offMap' },
       stage: null,
       odometerMi: gen.odometerMi(),
-      fuelPct: cls === 'ev' ? null : 100,
-      socPct: cls === 'ev' ? rng.range(80, 100) : null,
+      lastServiceMi: 0,
+      fuelPct: electric ? null : 100,
+      socPct: electric ? rng.range(80, 100) : null,
       energyStart: 0,
       energyTarget: 0,
       maintenance: false,
@@ -442,17 +449,19 @@ export function createSim(config: SimConfig): Sim {
       customerId: null,
       agreementNo: null,
       tier: null,
+      bookedCls: null,
       parkedPose: null,
     };
+    v.lastServiceMi = initialLastService(v.odometerMi, cls, rng);
     vehicles.set(v.id, v);
-    if (staged[cls] < INITIAL_STAGED[cls]) {
+    if (staged[row] < INITIAL_STAGED[row]) {
       const slots = pool('slot');
-      slots.enqueue(v.id, cls);
+      slots.enqueue(v.id, row);
       const grant = slots.allocate()[0];
       if (grant) {
         const park = unitOf(grant.unitId).parkEdge;
         if (engine.spawn(fleetSpec(v, [park]), graph.edge(park).length)) {
-          staged[cls]++;
+          staged[row]++;
           v.state = 'staged';
           v.stage = 'staged';
           v.phase = { kind: 'staged', unitId: grant.unitId };
@@ -527,9 +536,9 @@ export function createSim(config: SimConfig): Sim {
       v.stage = null;
       v.maintenance = v.severe = v.serviced = v.washed = false;
       v.returnedAt = null;
-      v.customerId = v.agreementNo = v.tier = null;
+      v.customerId = v.agreementNo = v.tier = v.bookedCls = null;
       v.odometerMi += rng.int(defaultRates.rentalMiles.min, defaultRates.rentalMiles.max);
-      if (v.cls === 'ev') v.socPct = uniform(defaultRates.returnSocPct);
+      if (energyOf(v.cls) === 'electric') v.socPct = uniform(defaultRates.returnSocPct);
       else v.fuelPct = uniform(defaultRates.returnFuelPct);
       v.phase = { kind: 'toQueue', station: 'returnLane' };
     }
@@ -539,8 +548,9 @@ export function createSim(config: SimConfig): Sim {
     const arrivals = pickupArrivals(rng, r.pickupsPerSimHour, dtSim, demandFactor());
     for (let i = 0; i < arrivals; i++) {
       const roll = rng.next();
-      const cls: VehicleClass = roll < facility.fleetMix.ev ? 'ev' : roll < facility.fleetMix.ev + facility.fleetMix.suv ? 'suv' : 'sedan';
-      customers.push({ cls, tier: gen.tier() });
+      let acc = 0;
+      const cls = FLEET_CLASS_ORDER.find((c) => (acc += FLEET_CLASSES[c].mix) > roll) ?? 'ev';
+      customers.push({ cls, tier: gen.tier(), arrivedAt: now });
     }
     // Departure back-pressure (W11): past the backlog cap, customers wait at the counter.
     const gates = hub.stations.gate.units.filter((u) => pool('gate').isOnline(u.id)).length;
@@ -549,13 +559,14 @@ export function createSim(config: SimConfig): Sim {
     while (customers.length > 0 && backlog < DEPARTURE_BACKLOG_PER_GATE * gates) {
       const c = customers[0] as Customer;
       const free = [...vehicles.values()].filter((v) => v.phase.kind === 'staged' && v.customerId === null);
-      const car = free.find((v) => v.cls === c.cls) ?? free[0];
+      const carId = matchCar(c.cls, free);
+      const car = carId === null ? undefined : vehicles.get(carId);
       if (!car) return;
       const pedId = `ped-${String(++pedCounter)}`;
       const spawned = engine.spawn({
         id: pedId,
         kind: 'pedestrian',
-        route: hub.walkway.routes[car.cls],
+        route: hub.walkway.routes[rowOf(car.cls)],
         length: dimensions.pedestrian.length,
         width: dimensions.pedestrian.width,
         priority: priority.pedestrian,
@@ -569,6 +580,7 @@ export function createSim(config: SimConfig): Sim {
       backlog++;
       car.customerId = pedId;
       car.tier = c.tier;
+      car.bookedCls = c.cls;
       pedestrians.set(pedId, car.id);
     }
   }
@@ -592,8 +604,8 @@ export function createSim(config: SimConfig): Sim {
       case 'charger':
       case 'pump':
         transition(v, 'energising');
-        v.energyStart = (v.cls === 'ev' ? v.socPct : v.fuelPct) ?? 0;
-        v.energyTarget = v.cls === 'ev' ? Math.max(v.energyStart, defaultRates.evStageSocPct + rng.int(0, 15)) : 100;
+        v.energyStart = (energyOf(v.cls) === 'electric' ? v.socPct : v.fuelPct) ?? 0;
+        v.energyTarget = energyOf(v.cls) === 'electric' ? Math.max(v.energyStart, defaultRates.evStageSocPct + rng.int(0, 15)) : 100;
         v.phase = at(Number.POSITIVE_INFINITY);
         return;
       case 'slot':
@@ -615,10 +627,17 @@ export function createSim(config: SimConfig): Sim {
     const { station, unitId } = phase;
     switch (station) {
       case 'returnLane': {
-        v.maintenance = rng.chance(r.maintenanceChance);
-        v.severe = v.maintenance && rng.chance(r.severeChance);
-        if (v.maintenance) {
-          emit({ type: 'maintenanceFlagged', vehicleId: v.id, cls: v.cls, reason: rng.pick(['tyres', 'oil', 'damage'] as const), severe: v.severe, simTimeSec: now });
+        if (serviceDue(v.odometerMi, v.lastServiceMi, v.cls)) {
+          // Scheduled service (FE-4): never severe, no random draws.
+          v.maintenance = true;
+          v.severe = false;
+          emit({ type: 'maintenanceFlagged', vehicleId: v.id, cls: v.cls, reason: 'interval', severe: false, simTimeSec: now });
+        } else {
+          v.maintenance = rng.chance(r.maintenanceChance);
+          v.severe = v.maintenance && rng.chance(r.severeChance);
+          if (v.maintenance) {
+            emit({ type: 'maintenanceFlagged', vehicleId: v.id, cls: v.cls, reason: rng.pick(['tyres', 'oil', 'damage'] as const), severe: v.severe, simTimeSec: now });
+          }
         }
         if (v.severe) {
           transition(v, 'awaitingTow');
@@ -649,6 +668,7 @@ export function createSim(config: SimConfig): Sim {
           return;
         }
         v.serviced = true;
+        v.lastServiceMi = v.odometerMi;
         if (!v.washed) {
           // Severe path: detailed in the service bay (requirements L-1 severe; architecture §11 note).
           transition(v, 'washQueue');
@@ -673,7 +693,7 @@ export function createSim(config: SimConfig): Sim {
           tier: v.tier ?? gen.tier(),
           gateId: unitId,
           cls: v.cls,
-          ratePerDay: 0, // Stage 3 placeholder (FE-5)
+          ratePerDay: FLEET_CLASSES[v.bookedCls ?? v.cls].ratePerDay,
           simTimeSec: now,
         });
         leaveUnit(v, station, unitId);
@@ -695,7 +715,7 @@ export function createSim(config: SimConfig): Sim {
       case 'toQueue':
         // The first car in line on the queue lane requests a unit while still rolling.
         if (mv.edgeId === queueEdge(phase.station) && (queueHeadS.get(phase.station) ?? -Infinity) <= mv.s) {
-          const tag = phase.station === 'slot' ? v.cls : undefined;
+          const tag = phase.station === 'slot' ? rowOf(v.cls) : undefined;
           pool(phase.station).enqueue(v.id, tag);
           v.phase = { kind: 'awaitGrant', station: phase.station, since: now, tagged: tag !== undefined };
         }
@@ -735,7 +755,9 @@ export function createSim(config: SimConfig): Sim {
           v.phase = { kind: 'offMap' };
           // Heatwave: returns come back sooner as well as pickups rising (X-1).
           const factor = weatherTable[weatherMode].demandFactor;
-          rent.add(v.id, now, returnAfter(rentalDuration(rng, r.meanRentalSimSec, defaultRates.minRentalSimSec) / factor));
+          const durationSec = rentalDuration(rng, r.meanRentalSimSec, defaultRates.minRentalSimSec) / factor;
+          ledger.book(bookingValue(v.bookedCls ?? v.cls, durationSec), START_HOUR * 3600 + now);
+          rent.add(v.id, now, returnAfter(durationSec));
         }
         return;
     }
@@ -1037,6 +1059,16 @@ export function createSim(config: SimConfig): Sim {
     return false;
   }
 
+  /**
+   * M9 (D36 extended to the tow truck): waiting, not gridlocked, when it has arrived, when it is heading for the
+   * service queue (as a fleet car heading for a queue is), or when it is stopped nose-to-tail behind a queued car.
+   * A real deadlock still shows at the head of the line.
+   */
+  function towWaiting(mv: MoverView | null): boolean {
+    if (!mv) return false;
+    return mv.finished || tow.phase === 'toQueue' || tow.phase === 'awaitBay' || (mv.speed <= QUEUE_CREEP_SPEED && behindQueuedCar(mv.id));
+  }
+
   function fleetView(v: Vehicle): AgentView | null {
     let pose: { x: number; z: number; heading: number };
     let speed: number;
@@ -1066,6 +1098,8 @@ export function createSim(config: SimConfig): Sim {
       // A car staged behind an occupied unit (K3) is waiting by design, not gridlocked.
       parked:
         v.state === 'awaitingTow' ||
+        // M9 (D36 extended): a car on the tow truck waits whenever the truck does.
+        (v.phase.kind === 'towed' && towWaiting(view(tow.id))) ||
         (v.phase.kind === 'toUnit' && pool(v.phase.station).nextOf(v.phase.unitId) === v.id) ||
         (v.phase.kind === 'toUnit' && speed <= QUEUE_CREEP_SPEED && (unitHeldByQueuedCar(v, v.phase.unitId) || behindQueuedCar(v.id))) ||
         (parked && v.phase.kind !== 'toUnit' && v.phase.kind !== 'exiting'),
@@ -1076,8 +1110,8 @@ export function createSim(config: SimConfig): Sim {
       fuelPct: v.fuelPct,
       socPct: v.socPct,
       odometerMi: v.odometerMi,
-      ratePerDay: null, // Stage 3 placeholder (FE-9)
-      milesToService: null, // Stage 3 placeholder (FE-4)
+      ratePerDay: FLEET_CLASSES[v.bookedCls ?? v.cls].ratePerDay,
+      milesToService: milesToService(v.odometerMi, v.lastServiceMi, v.cls),
       task,
       etaSimSec: eta,
       parentId,
@@ -1097,7 +1131,7 @@ export function createSim(config: SimConfig): Sim {
     } else if (mv.kind === 'tow') {
       pose = towTruckPose(mv);
       length = dimensions.tow.length;
-      parked = mv.finished;
+      parked = towWaiting(mv);
       task = { depot: 'Standing by at the depot', toPickup: 'Dispatched to the tow bay', toQueue: 'Towing to service', awaitBay: 'Waiting for a service bay', toBay: 'Towing into a service bay', returning: 'Returning to the depot' }[tow.phase];
     }
     return {
@@ -1146,7 +1180,7 @@ export function createSim(config: SimConfig): Sim {
         const occ = occupantId ? vehicles.get(occupantId) : undefined;
         if (occ?.phase.kind === 'working' && occ.phase.unitId === u.id) {
           if (id === 'charger' || id === 'pump') {
-            const level = (occ.cls === 'ev' ? occ.socPct : occ.fuelPct) ?? 0;
+            const level = (energyOf(occ.cls) === 'electric' ? occ.socPct : occ.fuelPct) ?? 0;
             const span = occ.energyTarget - occ.energyStart;
             progress = span <= 0 ? 1 : Math.min(1, Math.max(0, (level - occ.energyStart) / span));
           } else {
@@ -1173,6 +1207,10 @@ export function createSim(config: SimConfig): Sim {
       return { tick, simTimeSec: now, clockHours: hours, weather: weatherMode, timeScale, agents: agents(), resources: resources(), scenario: scenarioView(scenario, now), counterQueue: customers.length, demand: { factor: demandFactor(), period: periodOf(hours) } };
     },
     metrics() {
+      const revenueView = (): RevenueView => {
+        const risk = atRisk(customers, now, defaultRates.atRiskWaitSimSec);
+        return { ...ledger.view(START_HOUR * 3600 + now), atRisk: risk.amount, atRiskCount: risk.count };
+      };
       const fleetOnMap = [...vehicles.values()].filter((v) => v.phase.kind !== 'offMap');
       const stageCounts = Object.fromEntries(TRACKER_STAGES.map((s) => [s, 0])) as Record<TrackerStage, number>;
       for (const v of fleetOnMap) if (v.stage) stageCounts[v.stage]++;
@@ -1184,7 +1222,7 @@ export function createSim(config: SimConfig): Sim {
         readyEvSocPct: averageReadyEvSoc(fleetOnMap.map((v) => ({ cls: v.cls, state: v.state, socPct: v.socPct }))),
         counts: { total: facility.fleetSize, onRent: rent.size, ready, inTurnaround: fleetOnMap.length - ready - departing },
         stageCounts,
-        revenue: EMPTY_REVENUE, // Stage 3 placeholder (FE-5)
+        revenue: revenueView(),
       };
     },
     apply(command) {

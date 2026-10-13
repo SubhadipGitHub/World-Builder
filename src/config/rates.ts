@@ -5,8 +5,11 @@ export const rates = {
   // 15× since M7 (D30): turnaround counts inter-station driving × this factor (§20.1).
   timeScale: 15,
   stepWallSec: 0.05,
-  maintenanceChance: 0.1,
-  severeChance: 0.02,
+  // M9 (FE-4): mileage-based service flags 3–5% of inspections (measured over a day), so the random wear / damage
+  // roll drops from 0.10 to 0.06, for a total near 10% (Stage 4 calibration, §22.10).
+  maintenanceChance: 0.06,
+  // Raised from 0.02 with the lower roll, so tows stay about as frequent as in M7 (0.06 × 0.03 ≈ 0.1 × 0.02).
+  severeChance: 0.03,
   evStageSocPct: 80,
   inspectionSimSec: { min: 60, max: 120 },
   // Express tunnel since M7 (D31, D32): the wash was the peak bottleneck (queue 19 at 90–180 s).
@@ -21,6 +24,8 @@ export const rates = {
   returnFuelPct: { min: 10, max: 90 },
   returnSocPct: { min: 15, max: 75 },
   gridlockSimSec: 600,
+  /** Counter wait after which a booking counts as revenue at risk (M9, D50). */
+  atRiskWaitSimSec: 1_200,
   lookAheadM: 60,
 } as const;
 

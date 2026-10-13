@@ -28,6 +28,16 @@ export default tseslint.config(
     },
   },
   {
+    // M9 (architecture F2): EV vs petrol comes from energyOf(cls), the single test, so no stray class check survives.
+    files: ['src/**/*.{ts,tsx}'],
+    ignores: ['src/config/fleet.ts'],
+    rules: {
+      'no-restricted-syntax': ['error',
+        { selector: "BinaryExpression[operator=/^[!=]==$/][right.value='ev'][left.name='cls']", message: "Use energyOf(cls) from config/fleet, not cls === 'ev' (M9, F2)." },
+        { selector: "BinaryExpression[operator=/^[!=]==$/][right.value='ev'][left.property.name='cls']", message: "Use energyOf(cls) from config/fleet, not cls === 'ev' (M9, F2)." }],
+    },
+  },
+  {
     // Test idioms: `!` after an asserted length, and expect(() => fn()).toThrow().
     files: ['tests/**/*.{ts,tsx}'],
     rules: {

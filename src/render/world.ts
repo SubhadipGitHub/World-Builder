@@ -20,6 +20,7 @@ import { buildingAsset } from './assets/buildings';
 import { GATE_ARM_AHEAD_M, type DetailStates } from './details';
 import { assemble, paint, place } from './kit/assemble';
 import { cylinder, roundedBox } from './kit/shapes';
+import type { FoliageSway } from './foliageSway';
 import { buildLandscape } from './landscape';
 import { createLampsView } from './lampsView';
 import { airportPlan } from '../airport/plan';
@@ -43,6 +44,8 @@ export interface WorldFrame {
 
 export interface WorldHandle {
   readonly group: Group;
+  /** Foliage sway (M9, FE-13). */
+  readonly sway: FoliageSway;
   setConditions(conditions: WorldConditions): void;
   setPalette(palette: Palette): void;
   /** Per-frame animation: lamps, wash brushes, garage doors, gate barriers, charger lights (V-6, V-9). */
@@ -278,6 +281,7 @@ export function buildWorld(palette: Palette): WorldHandle {
   return {
     group,
     unitIds,
+    sway: landscape.sway,
     setConditions(c) {
       night = c.night;
       landscape.setConditions(c.wetness);

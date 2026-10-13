@@ -1,5 +1,7 @@
 import type { JSX } from 'preact';
-import { useState } from 'preact/hooks';
+import { SoundButton } from '../m9/SoundButton';
+import { VolumeSlider } from '../m9/VolumeSlider';
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { brand } from '../../config/brand';
 import { weather as weatherTable, weatherModes, type WeatherMode } from '../../config/weather';
 import type { AreaId, AreaLayout } from '../../layout/hub';
@@ -57,6 +59,8 @@ export interface TopBarProps {
   /** M9 (FE-20): role="switch" "Pop-up alerts" in the user menu. */
   readonly toastsOn: boolean;
   readonly onToasts: (on: boolean) => void;
+  /** Changing this opens the alerts menu (the "+n more" toast, FE-19). */
+  readonly openAlertsKey?: number;
 }
 
 const DAY_NIGHT: readonly { readonly value: DayNight; readonly label: string }[] = [
@@ -91,6 +95,31 @@ export function TopBar(props: TopBarProps): JSX.Element {
   const [active, setActive] = useState(-1);
   const [alertsOpen, setAlertsOpen] = useState(false);
   const [userOpen, setUserOpen] = useState(false);
+  // The panels below the bar (KPI cards, details, what-if drawer, toasts) start at --top. Track the bar's real
+  // height, so a wrapped row (M9 added the speaker button) can never slide under them.
+  const header = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    const el = header.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const root = document.documentElement;
+    const observer = new ResizeObserver(() => {
+      root.style.setProperty('--top', `${String(Math.ceil(el.getBoundingClientRect().bottom + 8))}px`);
+    });
+    observer.observe(el);
+    return () => {
+      observer.disconnect();
+      root.style.removeProperty('--top');
+    };
+  }, []);
+  // The "+n more" toast asks for the alerts menu (FE-19).
+  const openKey = props.openAlertsKey ?? 0;
+  useEffect(() => {
+    if (openKey === 0) return;
+    props.onOpenAlerts();
+    setAlertsOpen(true);
+    setUserOpen(false);
+    // Only a new key opens the menu; the handler's identity is irrelevant.
+  }, [openKey]);
 
   const results = props.snapshot ? search(query, props.snapshot, props.unitIds) : [];
   const open = results.length > 0;
@@ -119,7 +148,7 @@ export function TopBar(props: TopBarProps): JSX.Element {
   };
 
   return (
-    <header class="panel glass top-bar">
+    <header ref={header} class="panel glass top-bar">
       <div class="brand">
         <span class="brand-mark" aria-hidden="true" />
         <div>
@@ -234,6 +263,8 @@ export function TopBar(props: TopBarProps): JSX.Element {
         </button>
         <HelpButton onOpen={props.onOpenHelp} hoverCapable={hoverCapable()} />
 
+        <SoundButton on={props.sound} onToggle={props.onSound} />
+
         <div class="menu-anchor">
           <button
             type="button"
@@ -314,6 +345,18 @@ export function TopBar(props: TopBarProps): JSX.Element {
               >
                 Building labels
               </button>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={props.toastsOn ? 'true' : 'false'}
+                class="switch"
+                onClick={() => {
+                  props.onToasts(!props.toastsOn);
+                }}
+              >
+                Pop-up alerts
+              </button>
+              <VolumeSlider value={props.volume} onChange={props.onVolume} />
               <button
                 type="button"
                 class="menu-item"

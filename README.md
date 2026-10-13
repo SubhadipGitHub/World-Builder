@@ -18,8 +18,12 @@ dashboard tracks it all live, and what-if scenarios let you close units, change 
   realistic timings at 15× real time, with morning and evening demand peaks.
 - **A 3D world.** Cars, shuttles, carts and people on a lane graph that never lets them overlap; day and night,
   weather, street lights and an airport with scheduled flights.
-- **A live dashboard.** KPI cards (turnaround, utilisation, EV charge), a process tracker, live tables, alerts,
-  search, building labels, and light and dark themes.
+- **A live dashboard.** KPI cards (turnaround, utilisation, EV charge, revenue), a process tracker, live tables,
+  alerts with pop-ups, search, building labels, and light and dark themes.
+- **Fleet economics.** Seven rental classes, from an economy hatchback to a premium saloon, each with its own
+  daily rate and mileage-based service interval.
+- **Weather and sound.** Clear, overcast, fog, rain, thunderstorm and heatwave, with wind, lightning and
+  ambient particles, and an optional procedural soundscape (no audio files).
 - **What-if scenarios.** Presets, unit outages, crew levels and demand surges, compared live against a
   baseline hub that runs without them.
 - **Share it.** Deep links, an embed mode, a kiosk tour, captioned screenshots and built-in help.
@@ -37,7 +41,7 @@ npm run build      # one self-contained file: dist/index.html (open it straight 
 ```
 
 Controls: drag to pan, right-drag to rotate, wheel or pinch to zoom, click to select and follow.
-Press `?` in the app for all controls and what the numbers mean, and `P` to save a screenshot.
+Press `?` in the app for all controls and what the numbers mean, `P` to save a screenshot and `M` to turn sound on or off.
 
 ## Testing
 
@@ -58,7 +62,7 @@ viewer's saved preferences. **Copy link** in the user menu builds one for the cu
 |---|---|---|
 | `area` | `overview`, `return`, `wash`, `energy`, `lot`, `airport` | Starting area |
 | `cam` | `x,z,azimuth,elevation,distance` (angles in degrees) | Exact camera position |
-| `weather` | `clear`, `overcast`, `rain`, `heatwave` | Starting weather |
+| `weather` | `clear`, `overcast`, `fog`, `rain`, `storm`, `heatwave` | Starting weather |
 | `tod` | `auto`, `day`, `night` | Time of day |
 | `speed` | `0` (paused), `15`, `30`, `45` | Simulation speed |
 | `labels` | `0`, `1` | Building labels off or on |

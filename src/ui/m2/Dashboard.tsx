@@ -36,6 +36,7 @@ import { KioskCaption } from '../m8/KioskCaption';
 import { Notice } from '../m8/Notice';
 import type { ShareActions, ShareState } from '../m8/types';
 import type { Toast } from '../toasts';
+import { Toasts } from '../m9/Toasts';
 
 /** Everything the panels show, refreshed by the render loop (architecture §15.1). */
 export interface DashboardData {
@@ -141,6 +142,7 @@ export interface ScenarioActions {
 export function Dashboard(props: DashboardProps): JSX.Element {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [whatIfOpen, setWhatIfOpen] = useState(false);
+  const [openAlertsKey, setOpenAlertsKey] = useState(0);
   const data = props.data.value;
   const tables = props.tables.value;
   const settings = props.settings.value;
@@ -202,7 +204,20 @@ export function Dashboard(props: DashboardProps): JSX.Element {
             onVolume={props.audio.onVolume}
             toastsOn={settings.toasts}
             onToasts={props.audio.onToasts}
+            openAlertsKey={openAlertsKey}
           />
+          {settings.toasts ? (
+            <Toasts
+              toasts={data.toasts}
+              overflow={data.toastOverflow}
+              onSelect={props.audio.onToast}
+              onDismiss={props.audio.onDismissToast}
+              onHold={props.audio.onHoldToast}
+              onMore={() => {
+                setOpenAlertsKey((k) => k + 1);
+              }}
+            />
+          ) : null}
           <KpiCards cards={data.cards} deltas={data.deltas} />
           {data.snapshot ? (
             <WhatIfDrawer

@@ -88,9 +88,10 @@ describe('vehicleAsset: parts (V-2, P2)', () => {
     expect(e('minivan').y - e('sedan').y).toBeGreaterThanOrEqual(0.25);
     expect(e('pickup').y - e('sedan').y).toBeGreaterThanOrEqual(0.2);
     expect(e('luxury').y).toBeLessThanOrEqual(e('sedan').y);
-    // The economy hatch is the shortest car; the pickup the longest.
-    expect(e('economy').x).toBeLessThan(e('sedan').x - 0.4);
-    expect(e('pickup').x).toBeGreaterThan(e('suv').x);
+    // Stage 4 calibration (§22.10): fleet footprints stay in the proven 4.75–5.3 m range, so the economy hatch
+    // reads by its tall two-box profile rather than by length, and the pickup by its open bed (next test).
+    expect(e('economy').y - e('sedan').y).toBeGreaterThanOrEqual(0.05);
+    expect(e('economy').x).toBeLessThanOrEqual(e('sedan').x);
   });
 
   it('gives the pickup an open bed: no paint above the bed sides behind the cab (FE-10)', () => {

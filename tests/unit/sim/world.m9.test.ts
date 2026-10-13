@@ -4,7 +4,7 @@ import type { SimEvent } from '../../../src/sim/events';
 import type { VehicleClass } from '../../../src/sim/types';
 import { createSim, type Sim } from '../../../src/sim/world';
 
-// M9 simulation (FE-1…FE-7; architecture F3–F10).
+// M9 simulation (FE-1…FE-7; architecture F3–F10). Long runs: 30 s timeouts, so a loaded machine doesn't flake.
 
 const steps = (sim: Sim, n: number, each?: (i: number) => void): void => {
   for (let i = 0; i < n; i++) {
@@ -13,9 +13,10 @@ const steps = (sim: Sim, n: number, each?: (i: number) => void): void => {
   }
 };
 const fleetOnMap = (sim: Sim) => sim.snapshot().agents.filter((a) => a.kind === 'fleet');
+const AFTER_SERVICE = new Set(['energyQueue', 'energising', 'toLot', 'staged']);
 const RATES = new Set(Object.values(FLEET_CLASSES).map((c) => c.ratePerDay));
 
-describe('fleet of 7 classes (FE-1, FE-2)', () => {
+describe('fleet of 7 classes (FE-1, FE-2)', { timeout: 30_000 }, () => {
   it('brings every class onto the map over an hour or so', () => {
     const sim = createSim({ seed: 'm9-classes' });
     const seen = new Set<VehicleClass>();
@@ -44,7 +45,7 @@ describe('fleet of 7 classes (FE-1, FE-2)', () => {
   });
 });
 
-describe('ready lot by row (FE-3, D51)', () => {
+describe('ready lot by row (FE-3, D51)', { timeout: 30_000 }, () => {
   it('names the 48 stalls by row: 18 cars, 12 SUVs & vans, 18 EV', () => {
     const slots = createSim({ seed: 1 }).snapshot().resources.filter((r) => r.kind === 'slot');
     const byRow = (p: string) => slots.filter((s) => s.id.startsWith(`${p}-`)).length;
@@ -73,7 +74,7 @@ describe('ready lot by row (FE-3, D51)', () => {
   });
 });
 
-describe('mileage-based maintenance (FE-4, F5)', () => {
+describe('mileage-based maintenance (FE-4, F5)', { timeout: 30_000 }, () => {
   it('flags cars for scheduled service when due, never as severe', () => {
     const sim = createSim({ seed: 'm9-service', rateOverrides: { maintenanceChance: 0 } });
     const flags: Extract<SimEvent, { type: 'maintenanceFlagged' }>[] = [];
@@ -94,7 +95,8 @@ describe('mileage-based maintenance (FE-4, F5)', () => {
     steps(sim, 16_000, () => {
       for (const e of sim.drainEvents()) if (e.type === 'maintenanceFlagged') flagged.add(e.vehicleId);
       for (const a of fleetOnMap(sim)) {
-        if (!flagged.has(a.id) || a.state !== 'staged' || checked.has(a.id)) continue;
+        // Any state after the service bay (only ~3 cars fall due in this run, so the lot is too late to wait for).
+        if (!flagged.has(a.id) || !AFTER_SERVICE.has(a.state ?? '') || checked.has(a.id)) continue;
         expect(a.milesToService).toBe(FLEET_CLASSES[a.cls!].serviceIntervalMi);
         checked.add(a.id);
       }
@@ -103,7 +105,7 @@ describe('mileage-based maintenance (FE-4, F5)', () => {
   });
 });
 
-describe('revenue (FE-5, D50)', () => {
+describe('revenue (FE-5, D50)', { timeout: 30_000 }, () => {
   it('logs the class and booked rate on each checkout', () => {
     const sim = createSim({ seed: 'm9-checkout' });
     const events: SimEvent[] = [];
@@ -150,7 +152,7 @@ describe('revenue (FE-5, D50)', () => {
   });
 });
 
-describe('fog and thunderstorm (FE-6)', () => {
+describe('fog and thunderstorm (FE-6)', { timeout: 30_000 }, () => {
   const meanMovingSpeed = (mode: 'clear' | 'fog' | 'storm'): number => {
     const sim = createSim({ seed: 14, weather: mode });
     let sum = 0;

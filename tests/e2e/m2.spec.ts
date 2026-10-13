@@ -19,7 +19,8 @@ test('panels are frosted glass (D-1)', async ({ page }) => {
 test('KPI cards show live values (D-3)', async ({ page }) => {
   await open(page);
   const region = page.getByRole('region', { name: 'Key metrics' });
-  await expect(region.getByRole('heading')).toHaveText(['Turnaround time', 'Fleet utilisation', 'EV state of charge']);
+  // M9 (FE-8): a fourth card, revenue.
+  await expect(region.getByRole('heading')).toHaveText(['Turnaround time', 'Fleet utilisation', 'EV state of charge', 'Revenue today']);
   await expect(region.getByText(/^\d+%$/).first()).toBeVisible();
 });
 

@@ -1250,7 +1250,7 @@ FlightSchedule.nextTouchdown(t: number): number | null
 - **Production bundle:** 228.7 KB gzipped (budget 600 KB; +6.4 KB over M7, within the +15 KB M8 budget), with no test hooks.
 - **Workflows:** shape and order are pinned by unit tests. They run for real only after the user pushes: Pages needs "Settings → Pages → Source: GitHub Actions", and a Release needs a pushed `v0.8.0` tag.
 
-## 22. M9: Fleet economics, sound, weather FX and notifications (design approved 2026-10-13)
+## 22. M9: Fleet economics, sound, weather FX and notifications (design approved 2026-10-13; implemented, awaiting review)
 
 Implements requirements §14 (FE-1…FE-20, D48–D55). It has four parts:
 1. **Simulation:** 7 classes, per-class config, mileage service and revenue.
@@ -1516,3 +1516,43 @@ type KpiId = 'turnaround' | 'utilisation' | 'evSoc' | 'revenue';
   - the fixtures (`ratePerDay`, `milesToService`, `revenue`, `kind`), `m8` (Dashboard setup)
   - `day.soak` (fog in Balanced, storm stress, economics)
 
+
+### 22.10 Implementation notes (Stage 4, 2026-10-13)
+| Area | As designed | As built | Why |
+|---|---|---|---|
+| Fleet footprints | FE-2 sizes (economy 4.1 m, pickup 5.8 m) | **Every class within 4.75–5.3 m** (economy 4.75, pickup 5.3; D56, to confirm) | The day soak found the layout proven for 4.75–5.3 m. A 4.1 or 4.35 m car stopped in gaps on the service-exit and energy merges (pump queue jam, 56% served on one seed). A 5.8 m pickup made the tow truck's carry 13.3 m. Lengths in range: no jams. The economy hatch reads by its tall two-box profile, and the pickup by its open bed. |
+| Maintenance rates | Random roll about 0.04 | **0.06 random, severe 0.03** (D57) | Scheduled service flags 3–5% of inspections (measured), so 0.06 gives about 10% in all. Severe goes from 0.02 to 0.03, so tows stay as frequent as in M7. |
+| Gridlock check | D36 for fleet cars | **D36 extended to the tow truck and the car it carries** (D58) | The tow truck heading for a full service queue waited more than 10 minutes at the wash-exit merge for room for its 12.8–13.3 m. That is a long wait, not a deadlock. A fleet car heading for a queue already counts as waiting. `parked` feeds only the invariant checks and the UI, never the simulation. |
+| Soak targets | §14.8 | **Rain utilisation ≥ 58%; flag rate pooled over three seeds** (D59) | Missed by 1.5 pt and 0.1 pt respectively. One day's ~480 inspections carry ±1.3 pt of binomial noise; the three days pooled carry ±0.8 pt. |
+| Fog speed | −15% | **−10%** (D60) | At −15% the wash backed up past the morning peak (17 cars, still 15 an hour later). At −10% every original Balanced target holds on all three seeds. |
+| Top bar | Fixed `--top: 120px` | **`--top` follows the top bar's real height** (a `ResizeObserver` in `TopBar`) | The speaker button widened the controls, the area buttons wrapped onto a second row, and the fourth KPI card sat over them (E2E clicks were intercepted). Every panel that starts at `--top` now clears any wrap. |
+| Alerts | `ingest` returns created alerts | Also `observeSnapshot` returns them (low-charge warnings pop up too), and `markRead(id)` for a clicked toast | One feed for all warnings; the toast's alert stops counting as unread |
+| Particles | 2 meshes | 2 meshes (soft and additive), plus `render/particlesView.ts` for the emitters | Pure pool and caps tested in Node; the view is visual only (`Math.random` is fine outside the simulation) |
+| Lightning clock | Airport-style time | **A storm clock in real seconds, paused with the simulation and never sped up** | At 45× an airport-time schedule would bring strikes 2.7 s apart, breaking the 8 s floor (F12) |
+| Sound | Engine plays cues | Voices counted by scheduled end time, not `onended` | Robust in browsers and with the synchronous fake used in unit tests; the cap holds either way |
+| Fog halos | Lamps and runway lights | Lamp heads (hub lamps and apron masts) | Runway and taxiway lights are already a single bright instanced mesh, and fog density alone softens them |
+
+### 22.11 Verified results (2026-10-13)
+- **Unit and integration:** 783 tests in 97 files, plus typecheck and lint, all green. This includes every M9 test from Stage 3 except one test changed during calibration: the economy and pickup silhouette checks now compare shape, not length (D56).
+- **Soak:** 41 of 41. That covers the Balanced targets in clear, overcast, fog and rain; the heatwave and thunderstorm stress cases on all three seeds; and the fleet economics: pooled flag rate in 8–12%, and $25–40k booked per day per seed.
+- **E2E:** 56 of 56, including the 8 M9 tests:
+  - revenue grows;
+  - sound starts only on click, makes no requests and leaves the CSP unchanged;
+  - a toast selects its car;
+  - "Pop-up alerts" off is remembered;
+  - a storm strikes within 30 s and stays in budget;
+  - tier 2 has no particles and stays in budget;
+  - fog turns on the headlights by day;
+  - the menu has six weather modes.
+- **Production bundle:** 240.6 KB gzipped (+11.9 KB over M8; budget +40 KB, limit 600 KB), with no test hooks.
+- **Draw calls at 1280 × 800** (maximum over 2 s), Stage 3 code against M9:
+
+| View | Before M9 | M9 | Limit |
+|---|---|---|---|
+| Hub overview, tier 0, day, clear | 129 | 151 | — |
+| Hub overview, tier 0, night, thunderstorm | 145 | 169 | 300 |
+| Airport, tier 0, night, thunderstorm | 141 | 165 | 300 |
+| Hub overview, tier 2, night, thunderstorm | 77 | 90 | 150 |
+| Airport, tier 2, night, thunderstorm | 75 | 88 | 150 |
+
+  M9 adds +24 at tier 0, against an estimate of ≤ +20. The estimate missed that the 4 new classes' paint and trim meshes also draw in the tier-0 shadow pass (+8). The rest is 12 car meshes, 2 particle meshes and the 2-part windsock. At tier 2 (no shadows) it adds +13 (budget +14). Both absolute limits hold with a wide margin. **To confirm** (§14.7).
