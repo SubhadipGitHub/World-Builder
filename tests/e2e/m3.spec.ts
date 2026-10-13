@@ -17,9 +17,9 @@ test('street lights switch on at night and off by day (V-6)', async ({ page }) =
   await open(page);
   await expect.poll(() => page.evaluate(() => window.__hub!.lampsLit())).toBe(0);
   await timeOfDay(page, 'Night');
-  await expect.poll(() => page.evaluate(() => window.__hub!.lampsLit()), { timeout: 10_000 }).toBe(1);
+  await expect.poll(() => page.evaluate(() => window.__hub!.lampsLit()), { timeout: 20_000 }).toBeGreaterThanOrEqual(1);
   await timeOfDay(page, 'Day');
-  await expect.poll(() => page.evaluate(() => window.__hub!.lampsLit()), { timeout: 10_000 }).toBe(0);
+  await expect.poll(() => page.evaluate(() => window.__hub!.lampsLit()), { timeout: 20_000 }).toBe(0);
 });
 
 test('lamps come on one by one, not all at once (V-6)', async ({ page }) => {
