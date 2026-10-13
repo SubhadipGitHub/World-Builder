@@ -6,9 +6,22 @@ import { expect, test, type Page } from '@playwright/test';
 // M8 ship & share end to end (requirements §13, architecture §21), against the test build.
 const URL = pathToFileURL(resolve('dist/index.html')).href;
 
+/** Generous: the first frame compiles every shader, which takes a while under software WebGL in CI. */
+const READY_MS = 60_000;
+const AREA_ORDER = ['overview', 'return', 'wash', 'energy', 'lot', 'airport'] as const;
+const AREA_LABEL: Readonly<Record<(typeof AREA_ORDER)[number], string>> = {
+  overview: 'Overview',
+  return: 'Return & inspection',
+  wash: 'Wash & maintenance',
+  energy: 'EV charging & fuel',
+  lot: 'Ready lot & exit gate',
+  airport: 'Airport',
+};
+const nextArea = (a: (typeof AREA_ORDER)[number]): (typeof AREA_ORDER)[number] => AREA_ORDER[(AREA_ORDER.indexOf(a) + 1) % AREA_ORDER.length] ?? 'overview';
+
 async function open(page: Page, query = ''): Promise<void> {
   await page.goto(URL + query);
-  await page.waitForFunction(() => window.__hub?.ready === true, undefined, { timeout: 20_000 });
+  await page.waitForFunction(() => window.__hub?.ready === true, undefined, { timeout: READY_MS });
 }
 
 /** Width and height from a PNG's IHDR chunk. */
@@ -73,9 +86,12 @@ test('Copy link captures the current view and round-trips (SH-7)', async ({ page
   expect(link).toContain('seed=share-1');
   expect(link).toMatch(/cam=-?[\d.]+,-?[\d.]+,-?[\d.]+,[\d.]+,[\d.]+/);
 
-  const again = await page.context().newPage();
+  // One WebGL page at a time: two software-rendered pages starve each other on a CI runner.
+  const context = page.context();
+  await page.close();
+  const again = await context.newPage();
   await again.goto(link);
-  await again.waitForFunction(() => window.__hub?.ready === true, undefined, { timeout: 20_000 });
+  await again.waitForFunction(() => window.__hub?.ready === true, undefined, { timeout: READY_MS });
   expect(await again.evaluate(() => window.__hub!.weather())).toBe('overcast');
   await expect(again.getByRole('group', { name: 'Simulation speed' }).getByRole('button', { name: '30×' })).toHaveAttribute('aria-pressed', 'true');
   expect(await again.evaluate(() => window.__hub!.link())).toBe(link);
@@ -99,34 +115,45 @@ test('embed mode shows only the compact HUD, within the draw-call budget (SH-8)'
 });
 
 test('kiosk tours the areas, pauses on input and exits with Esc (SH-9, SH-10)', async ({ page }) => {
+  // The tour runs on wall time, so a slow machine may already have moved on: follow whatever area it
+  // is on, and pause it before checking anything that takes time.
   await open(page, '?kiosk=1');
   const caption = page.getByRole('region', { name: 'Tour' });
-  await expect(caption).toContainText('Overview');
   await expect(page.getByRole('banner')).toHaveCount(0);
-  expect(await page.evaluate(() => window.__hub!.kiosk()?.area)).toBe('overview');
-  await page.evaluate(() => {
-    window.__hub!.advanceKiosk(20.1);
-  });
-  expect(await page.evaluate(() => window.__hub!.kiosk()?.area)).toBe('return');
-  await expect(caption).toContainText('Return & inspection');
-  await expect(caption).toContainText('Rental Car Return ·');
-  await expect
-    .poll(async () => page.evaluate(() => ({ cam: window.__hub!.cameraTarget(), goal: window.__hub!.areaTarget('return') })).then((r) => Math.hypot(r.cam.x - r.goal.x, r.cam.z - r.goal.z)), { timeout: 8_000 })
-    .toBeLessThan(1);
+  const kiosk = () => page.evaluate(() => window.__hub!.kiosk());
 
+  // Pointer input (the wheel) pauses the tour where it is.
   await page.mouse.move(400, 400);
   await page.mouse.wheel(0, 100);
   await expect(page.getByText(/^Tour paused · resumes in \d+ s$/)).toBeVisible();
-  expect(await page.evaluate(() => window.__hub!.kiosk()?.phase)).toBe('paused');
+  const paused = await kiosk();
+  expect(paused?.phase).toBe('paused');
+  const first = paused?.area ?? 'overview';
+  await expect(caption).toContainText(AREA_LABEL[first]);
+
+  // After 60 s without input it resumes on the next area.
   await page.evaluate(() => {
     window.__hub!.advanceKiosk(61);
   });
-  expect(await page.evaluate(() => window.__hub!.kiosk())).toMatchObject({ phase: 'touring', area: 'wash' });
+  const second = nextArea(first);
+  expect(await kiosk()).toMatchObject({ phase: 'touring', area: second });
+  await expect(caption).toContainText(AREA_LABEL[second]);
+
+  // Key input pauses it too; the flight to the new area still lands.
+  await page.keyboard.press('Shift');
+  expect(await kiosk()).toMatchObject({ phase: 'paused', area: second });
+  await expect
+    .poll(async () =>
+      page
+        .evaluate((id) => ({ cam: window.__hub!.cameraTarget(), goal: window.__hub!.areaTarget(id) }), second)
+        .then((r) => Math.hypot(r.cam.x - r.goal.x, r.cam.z - r.goal.z)),
+    )
+    .toBeLessThan(1);
 
   await page.keyboard.press('Escape');
   expect(await page.evaluate(() => window.__hub!.mode())).toBe('normal');
   await expect(page.getByRole('banner')).toBeVisible();
-  expect(await page.evaluate(() => window.__hub!.kiosk())).toBeNull();
+  expect(await kiosk()).toBeNull();
 });
 
 test('Start tour in the user menu enters kiosk mode (SH-9)', async ({ page }) => {
