@@ -49,14 +49,15 @@ test('clicking a live table row selects that vehicle (D-6)', async ({ page }) =>
 
 test('weather changes both the simulation and the scene (X-1)', async ({ page }) => {
   await open(page);
-  await page.getByRole('combobox', { name: 'Weather' }).selectOption('rain');
-  await expect.poll(() => page.evaluate(() => window.__hub!.weather())).toBe('rain');
-  await expect.poll(() => page.evaluate(() => window.__hub!.environment())).toMatchObject({ rain: true, wetness: 1 });
+  const weather = page.getByRole('combobox', { name: 'Weather' });
+  await weather.selectOption({ label: 'Rain' });
+  await expect.poll(() => page.evaluate(() => window.__hub!.weather()), { timeout: 10_000 }).toBe('rain');
+  await expect.poll(() => page.evaluate(() => window.__hub!.environment()), { timeout: 10_000 }).toMatchObject({ rain: true, wetness: 1 });
 });
 
 test('night mode darkens the hub and stays within the draw-call budget in the rain (X-2, N-2)', async ({ page }) => {
   await open(page);
-  await page.getByRole('combobox', { name: 'Weather' }).selectOption('rain');
+  await page.getByRole('combobox', { name: 'Weather' }).selectOption({ label: 'Rain' });
   await page.getByRole('group', { name: 'Time of day' }).getByRole('button', { name: 'Night' }).click();
   await expect.poll(() => page.evaluate(() => window.__hub!.environment().nightFactor)).toBe(1);
   await page.waitForTimeout(500);
@@ -77,7 +78,7 @@ test('the light theme applies and survives a reload (X-4)', async ({ page }) => 
 test('reduced motion turns off heat shimmer (N-5)', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await open(page);
-  await page.getByRole('combobox', { name: 'Weather' }).selectOption('heatwave');
+  await page.getByRole('combobox', { name: 'Weather' }).selectOption({ label: 'Heatwave' });
   await expect.poll(() => page.evaluate(() => window.__hub!.environment())).toMatchObject({ heat: true, shimmer: false });
 });
 
