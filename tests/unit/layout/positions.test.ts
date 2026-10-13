@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { hub, hubGraph } from '../../../src/layout/hub';
-import { areaById, areaOf, hubBounds, unitMarker, unitPose } from '../../../src/layout/positions';
+import { areaById, areaOf, hubBounds, unitMarker, unitPose, unitStop } from '../../../src/layout/positions';
 
 const graph = hubGraph();
 const allUnits = Object.values(hub.stations).flatMap((s) => s.units);
@@ -33,6 +33,20 @@ describe('unitMarker', () => {
       expect(m.z).toBeCloseTo(end.z + Math.sin(h) * 1.2, 5);
     }
     expect(() => unitMarker('nope')).toThrow();
+  });
+});
+
+describe('unitStop', () => {
+  it('is the end of each unit’s park edge, where a parked car’s front bumper stops', () => {
+    for (const u of allUnits) {
+      const edge = graph.edge(u.parkEdge);
+      const end = edge.path.pointAt(edge.length);
+      const s = unitStop(u.id);
+      expect(s.x).toBeCloseTo(end.x, 5);
+      expect(s.z).toBeCloseTo(end.z, 5);
+      expect(s.heading).toBeCloseTo(edge.path.headingAt(edge.length - 0.1), 5);
+    }
+    expect(() => unitStop('nope')).toThrow();
   });
 });
 

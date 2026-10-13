@@ -15,9 +15,9 @@ import {
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { OUTAGE_KINDS } from '../config/scenarios';
 import { hub } from '../layout/hub';
-import { unitMarker, unitPose, type Pose } from '../layout/positions';
+import { unitMarker, unitPose, unitStop, type Pose } from '../layout/positions';
 import { buildingAsset } from './assets/buildings';
-import type { DetailStates } from './details';
+import { GATE_ARM_AHEAD_M, type DetailStates } from './details';
 import { assemble, paint, place } from './kit/assemble';
 import { cylinder, roundedBox } from './kit/shapes';
 import { buildLandscape } from './landscape';
@@ -134,6 +134,16 @@ const barrierArm = (): BufferGeometry => {
   return assemble(parts);
 };
 
+const armLift = new Quaternion();
+/**
+ * Gate arm orientation (V-9): yawed to reach across its lane (towardLane 0 → −z, π → +z), then
+ * swung about its pivot so the tip rises (lift 0 flat … 1 vertical). Returns a shared quaternion.
+ */
+export function gateArmRotation(lift: number, towardLane: number): Quaternion {
+  // The arm reaches along local −z, so a positive turn about +x lifts its tip.
+  return q.setFromAxisAngle(UP, towardLane).multiply(armLift.setFromAxisAngle(X_AXIS, lift * (Math.PI / 2)));
+}
+
 /** Static scene (V-1..V-6): landscape, Pixar-style buildings, equipment, lamps and live details. */
 export function buildWorld(palette: Palette): WorldHandle {
   const group = new Group();
@@ -227,7 +237,7 @@ export function buildWorld(palette: Palette): WorldHandle {
   const doors = new InstancedMesh(rollerDoor(), equipMat, serviceIds.length);
   doors.castShadow = true;
   const gateIds = hub.stations.gate.units.map((u) => u.id);
-  const gateZ = hub.stations.gate.units.map((u) => unitPose(u.id).z);
+  const gateStops = gateIds.map((id) => unitStop(id));
   const arms = new InstancedMesh(barrierArm(), equipMat, gateIds.length);
   arms.castShadow = true;
 
@@ -250,12 +260,11 @@ export function buildWorld(palette: Palette): WorldHandle {
       doors.setMatrixAt(i, tmp.compose(pos.set(106, 3.6 * open, unitPose(id).z), q.identity(), scale.set(1, 1 - 0.9 * open, 1)));
     });
     doors.instanceMatrix.needsUpdate = true;
-    gateZ.forEach((z, i) => {
-      // Pivot on a post between the lanes; the arm reaches across its own lane and lifts to vertical.
-      const towardLane = z < 190 ? 0 : Math.PI;
-      const lift = (armUp[i] ?? 0) * (Math.PI / 2);
-      q.setFromAxisAngle(UP, towardLane).multiply(new Quaternion().setFromAxisAngle(X_AXIS, -lift));
-      arms.setMatrixAt(i, tmp.compose(pos.set(-66.4, 1.05, z < 190 ? 189.5 : 190.5), q, ONE));
+    gateStops.forEach((s, i) => {
+      // Pivot on a post between the lanes, just past the stop line; the arm reaches across its own lane and lifts to vertical.
+      const towardLane = s.z < 190 ? 0 : Math.PI;
+      const armX = s.x + Math.cos(s.heading) * GATE_ARM_AHEAD_M;
+      arms.setMatrixAt(i, tmp.compose(pos.set(armX, 1.05, s.z < 190 ? 189.5 : 190.5), gateArmRotation(armUp[i] ?? 0, towardLane), ONE));
     });
     arms.instanceMatrix.needsUpdate = true;
   };

@@ -41,12 +41,17 @@ const MARKER_AHEAD = 1.2;
  * Throws on an unknown unit id.
  */
 export function unitMarker(unitId: string): Pose {
+  const s = unitStop(unitId);
+  return { x: s.x + Math.cos(s.heading) * MARKER_AHEAD, z: s.z + Math.sin(s.heading) * MARKER_AHEAD, heading: s.heading };
+}
+
+/** The end of a unit's park edge, where a parked car's front bumper stops. Throws on an unknown unit id. */
+export function unitStop(unitId: string): Pose {
   const unit = unitsById.get(unitId);
   if (!unit) throw new Error(`Unknown unit ${unitId}`);
   const edge = hubGraph().edge(unit.parkEdge);
   const end = edge.path.pointAt(edge.length);
-  const heading = edge.path.headingAt(edge.length - 0.1);
-  return { x: end.x + Math.cos(heading) * MARKER_AHEAD, z: end.z + Math.sin(heading) * MARKER_AHEAD, heading };
+  return { x: end.x, z: end.z, heading: edge.path.headingAt(edge.length - 0.1) };
 }
 
 /** Axis-aligned bounds of every lane-graph point, grown by `margin` metres (default 20). */

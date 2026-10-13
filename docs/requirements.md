@@ -207,7 +207,7 @@ Goal: a premium, Pixar-style living diorama with warm roadside lighting at night
   - wash brushes spin while a bay is in use
   - garage doors open for occupied service bays
   - charger lights show charging or idle
-  - gate barriers lift for the car at the gate
+  - gate barriers stay down while a car drives up and checks out, lift (tip upwards) near the end of checkout, and stay up until the departing car's rear has cleared the arm (fix 2026-10-13: the arm used to swing into the ground and drop on the leaving car once R-1 released the gate early)
   - the tow beacon flashes while towing
 
 ### 8.2 Unchanged
