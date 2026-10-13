@@ -276,6 +276,13 @@ const pumpUnits: UnitLayout[] = Array.from({ length: facility.fuelPumps }, (_, k
   return { id: `pump${String(k + 1)}`, parkEdge: park };
 });
 
+// Energy bypass (M7, R-8): east of the fuel station, so charge-later cars reach the lot without
+// entering a charger or pump lane.
+edge('energy_bypass', ED, M_FUEL, {
+  speed: SPEED.lane,
+  via: [...curve(ED, SOUTH, pt(189, 8), SOUTH), pt(189, 60), ...curve(pt(189, 60), SOUTH, M_FUEL, WEST)],
+});
+
 const ME = node('me', 110, 85);
 edge('ev_out', M_EV, ME, { speed: SPEED.lane, via: curve(M_EV, SOUTH, ME, WEST) });
 edge('fuel_out', M_FUEL, ME, { speed: SPEED.lane, via: [...curve(M_FUEL, SOUTH, pt(157, 85), WEST), pt(157, 85)] });
@@ -344,7 +351,10 @@ edge('gate_r0', GR[0] as Point, GR[1] as Point, { speed: SPEED.lot });
 edge('gate_r1', GR[1] as Point, GR[2] as Point, { speed: SPEED.lot });
 const gateQueue = edge('gate_q', GR[2] as Point, GF, { speed: SPEED.lot });
 const GX = node('gx', -85, GATE_Z);
-const gateUnits: UnitLayout[] = [GATE_Z - 3, GATE_Z + 3].map((z, k) => {
+/** Gate lanes are 6 m apart, centred on GATE_Z (one per facility.exitGates). */
+const GATE_PITCH = 6;
+const gateZs = Array.from({ length: facility.exitGates }, (_, k) => GATE_Z + (k - (facility.exitGates - 1) / 2) * GATE_PITCH);
+const gateUnits: UnitLayout[] = gateZs.map((z, k) => {
   const g = node(`g${String(k)}`, -65, z);
   const park = edge(`gate${String(k)}`, GF, g, { speed: SPEED.bay, via: [...curve(GF, WEST, pt(-52, z), WEST), pt(-52, z)] });
   edge(`gatex${String(k)}`, g, GX, { speed: SPEED.bay, via: curve(g, WEST, GX, WEST) });
@@ -412,7 +422,7 @@ export const hub: HubLayout = {
     { id: 'evHub', label: 'EV fast-charging hub', x: 125, z: 42, width: 38, depth: 14, height: 5 },
     { id: 'fuel', label: 'Fuel station', x: 170, z: 42, width: 28, depth: 14, height: 5 },
     { id: 'lot', label: 'Ready-for-Rent lot', x: 30, z: 126, width: 72, depth: 62, height: 0.2 },
-    { id: 'gates', label: 'Exit gates', x: -65, z: GATE_Z, width: 8, depth: 16, height: 4 },
+    { id: 'gates', label: 'Exit gates', x: -65, z: GATE_Z, width: 8, depth: facility.exitGates * GATE_PITCH + 4, height: 4 },
     { id: 'depot', label: 'Tow depot', x: -130, z: -121, width: 12, depth: 8, height: 5 },
   ],
   areas: [

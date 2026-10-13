@@ -810,7 +810,7 @@ src/app/main.ts            site view, labels, hooks
 
 - **Screenshots for review:** overview labels (compact), the return canopy with its full label, the entrance (pylon, flags, booth with boom, barriers, RETURN, gantry, fence) by day and night, and night overview signs.
 
-## 19. M6: airport context (design approved 2026-10-12; implemented, awaiting review)
+## 19. M6: airport context (design approved 2026-10-12; implemented)
 
 Implements requirements §11 (A-1…A-6, F-1…F-5, L-1, L-2, D22–D25). The simulation is untouched. The airport is a pure plan plus pure motion schedules, rendered by one new view.
 
@@ -958,3 +958,295 @@ airportDetail(tier, reducedMotion) → { flights; traffic: 1 | 0.5 | 0; vehicles
 
 - **Jet model:** 1,224 triangles (budget 2,500).
 - **Screenshots for review:** the airport with labels and a landing, the terminal close-up (bridges, gate numbers, liveries), the hub with the airport, and the airport at night (runway, taxiway and apron lights).
+
+## 20. M7: ops realism tuning (design approved 2026-10-13; implemented and approved 2026-10-13)
+
+Implements requirements §12 (R-1…R-8, D26–D39). The changes are confined to the simulation's timing and demand, a small UI readout, and the airport cadence. The one layout change is the energy bypass lane (D33, §20.7); there are no new visual assets.
+
+### 20.1 Measurements behind the design (2026-10-13)
+- **Where a unit's cycle goes** (seed `goldlane`, 2 simulated hours, 20×):
+
+  | Unit | Drive-in (grant → stop) | Work | Leave | Idle |
+  |---|---|---|---|---|
+  | Exit gate | 273 s | 15 s | 47 s | 88 s |
+  | Wash bay | 133 s | 144 s | 47 s | 347 s |
+
+  The drive-in from the queue head to the stop dominates. A release rule alone (R-1) only trims the 47 s "leave".
+- **Time scale against daily KPIs** (flat demand, clear):
+
+  | Time scale | Turnaround | Served | Utilisation |
+  |---|---|---|---|
+  | 20× | 57.0 min | 97% | 62.7% |
+  | 15× | 43.0 min | 98% | 62.7% |
+  | 12× | 35.0 min | 103% | 69.4% |
+
+  Turnaround is mostly inter-station driving at natural speed, which counts × the time scale. Hence D30.
+- **Unit approach lanes hold two cars:** gate 25.5 m, wash 16.6 m, service 33.1 m, charger 38.5 m, pump 35.0 m, return lane 42.2 m.
+
+### 20.2 Key decisions
+| # | Decision | Why |
+|---|---|---|
+| K1 | **Hub clock 15×** (`rates.timeScale` 20 → 15; D30). The speed buttons become **15× / 30× / 45×** (still 1, 2 or 3 steps per tick, M4 W9). The airport maps 15 hub seconds per airport second (one hub day = 96 airport minutes). | Turnaround 43 min with natural driving (§20.1). It's one constant: rates, KPIs and the curve all read it. |
+| K2 | **Release when the front leaves the unit's lane (R-1).** `processReleases` frees a unit as soon as the leaving car's front is off the unit's park edge, instead of waiting for its whole body to clear. The traffic engine's no-overlap rules (L-4, IDM following across edges) keep the next car behind it. | Trims "leave" for every bay type (Q1), with safety still guaranteed by the engine. |
+| K3 | **Roll-up staging (two-deep lanes).** `ResourcePool` gains a per-unit `next`: when a unit is occupied and has no `next`, the first matching waiting agent is granted as `next` (FIFO, tags respected) and drives into the unit's lane, stopping behind the occupant. On release, `next` becomes the occupant and pulls up to the stop. It applies to return lanes, wash bays, chargers, pumps and gates; **not** service bays (tow-truck hand-offs) or slots and the tow bay. | Removes most of the 273 s gate drive-in (and the wash's 133 s). This is how real exit gates and wash tunnels queue. Every lane holds two cars inside the unit's own edge, so nothing blocks a shared lane (§20.1). |
+| K4 | **Gate dwell 8–15 s** (R-2): `GATE_DWELL`. | R-2. |
+| K5 | **Day curve as a pure function,** `sim/demand.ts`: `dayCurve(hours)` is piecewise linear through the R-3 anchor values (at hour mid-points), normalised so its 24 h mean is exactly 1.0. Also `periodOf(hours)` ("Overnight", "Morning peak", …). Pickup arrivals use the rate × weather × surge × `dayCurve(clockHours)`. | R-3; testable on its own. |
+| K6 | **Returns shaped by time-warping (R-4).** A rental's duration is drawn as today (exponential, mean 3.9 h). Its return time is the moment the curve-weighted clock has advanced by that duration: `returnAt = C⁻¹(C(pickup) + duration)`, where C is the cumulative curve. Returns then arrive at a rate ∝ the curve, the mean real duration over a day equals the drawn mean, and the 30-min minimum is enforced in real time. | Returns cluster at peaks without a second random model, and stay deterministic. |
+| K7 | **Snapshot demand.** `Snapshot.demand = { factor, period }`, where factor = curve × weather × surge (what the hub is experiencing). It is read-only. | R-7 without the UI re-deriving simulation rules. |
+| K8 | **Flight cadence by hub hour (R-5).** The airport timeline becomes a sequence of cycles: c₍k+1₎ = c_k + 2·I(h(c_k)), where I(h) = clamp(40 / dayCurve(h), I_min, 120) and h(t) = 8 + 15·t/3600. <ul><li>Arrival touchdown at c; departure line-up at c + I + 4, with a 20 s take-off roll.</li><li>I_min = 25 s if the separation tests pass, otherwise 30 s; both are "about 25 s" (R-5).</li><li>A surge extra inserts an 80 s arrival-only cycle at the first boundary ≥ t + 35 s. Later cycles shift; already-started flights are unaffected, and the approach still begins within 5 s.</li></ul> | Keeps every M6 safety rule checkable by the same unit tests. |
+| K9 | **Demand readout:** the pure `demandText({ factor, period })` gives "Demand ×1.6 · Morning peak" (one decimal; "×1.0"). `TopBar` shows it next to the clock (aria-label "Demand"). | R-7. |
+
+### 20.3 Contracts
+```ts
+// sim/demand.ts
+dayCurve(hours: number): number                    // ≥ 0, 24 h mean = 1, piecewise linear
+periodOf(hours: number): 'Overnight' | 'Early morning' | 'Morning peak' | 'Midday' | 'Evening peak' | 'Late evening'
+cumulativeDemand(hours: number): number             // ∫ curve from 0 to hours (hours in [0, ∞); 24 per day)
+warpReturn(pickupClockSec: number, durationSec: number, minSec: number): number   // seconds until the return
+// sim/resources.ts
+interface Grant { …; readonly next?: boolean }       // granted as the unit's next (staged)
+interface ResourcePool { …; nextOf(unitId: string): string | null }
+createResourcePool(units, { staging: boolean })      // staging on for the K3 kinds
+// sim/world.ts
+Snapshot.demand: { readonly factor: number; readonly period: string }
+// config/rates.ts: timeScale 15; GATE_DWELL { min: 8, max: 15 }
+// airport/flights.ts: CYCLE_SEC replaced by movementInterval(hours); hubHoursAt(airportTime)
+// ui/demand.ts: demandText(demand) → string; TopBar prop `demand`
+```
+
+### 20.4 Test plan (Stage 3 preview)
+| Layer | What's tested |
+|---|---|
+| Unit: `sim/demand` | The curve's anchor values; its 24 h mean is 1 (±1e-9); no steps (continuous); period names by hour. `cumulativeDemand` is monotonic and adds 24 per day. `warpReturn` is ≥ the minimum; over many draws the mean real duration matches the drawn mean ±5%, and the share of returns in peak hours is ≥ 1.4× the mean. |
+| Unit: resources | Staging: `next` is granted only while occupied; FIFO and tags; promotion on release; no staging when disabled; `nextOf`. |
+| Integration: `sim/world` | `timeScale` 15; gate dwell within 8–15 s; release happens before the leaving car's rear clears the lane; staged cars never overlap (invariants every step); `Snapshot.demand` follows the curve, weather and surge; determinism (S-15) still holds; the baseline still matches a pristine run (S-16). |
+| Soak: day-long (new) | Seeds 1–3 × clear, overcast, rain × 24 simulated hours: turnaround ≤ 45 min; utilisation 60–70%; served ≥ 90%; gate, wash, service and charger queues ≤ 10 at all times and ≤ 3 within 60 simulated minutes after each peak; counter recovery; no overlap or gridlock. Heatwave: no overlap or gridlock, served ≥ 80%, queues recover. |
+| Unit: airport | The interval follows the curve (≈ 25 s peak, 40 s midday, 120 s overnight). All M6 flight tests still pass across a full hub day of cycles, including extras inserted at a peak. |
+| Unit: UI | `demandText`; TopBar shows the readout; the speed control labels 15× / 30× / 45×. |
+| E2E | The demand readout is visible next to the clock and changes with weather; the M4 speed test uses the new labels; existing suites stay green. |
+
+### 20.5 Risks
+| Risk | Mitigation |
+|---|---|
+| Staging causes deadlock where lanes merge | Staging only on units whose own park edge holds two cars (all K3 kinds, §20.1); the day-long soak checks for gridlock in every weather |
+| The clock change shifts calibrated tests (M1 soak floors, M4 surge thresholds, speed labels) | Stage 3 lists each change with its reason; assertions are re-derived from `rates`, not weakened silently |
+| A 25 s peak cadence breaks aircraft separation | I_min falls back to 30 s if the tests require it (K8) |
+| The airport and hub clocks drift at low frame rates | Cosmetic only; the cadence mapping is a pure function of airport time (documented) |
+
+### 20.6 Stage 3 status (2026-10-13)
+- **Contracts (stubbed):**
+  - `sim/demand`: `dayCurve`, `periodOf`, `cumulativeDemand`, `warpReturn`
+  - `ResourcePool` options `{ staging }`, `Grant.next`, `nextOf`
+  - `Snapshot.demand` (a placeholder of ×1.0 · Midday)
+  - `airport/flights`: `hubHoursAt`, `movementInterval`, `MIN_INTERVAL` / `MAX_INTERVAL`
+  - `ui/demand`: `demandText`; `TopBar` gains `demand` (passed by `Dashboard`)
+  - A staged car's task reads "Waiting behind …"
+- **Failing tests:**
+  - 26 unit tests in 7 files: day curve, staging pool, M7 world, flight cadence, demand text, TopBar readout and speed labels.
+  - The new day-long soak (`tests/soak/day.soak.test.ts`: 9 Balanced runs plus 3 heatwave runs). Seed 1 in clear today: turnaround 60.5 min against ≤ 45.
+  - 2 E2E tests (`tests/e2e/m7.spec.ts`).
+- **Existing tests changed because of the approved D30 / K8,** each re-derived from the spec rather than loosened:
+  - Speed labels: 20× / 40× / 60× → 15× / 30× / 45× (`SpeedControl`, `TopBar`, the M4 E2E speed test).
+  - The M6 flight cadence: the fixed 80 s gap became 2 × `movementInterval` at the touchdown's hub hour.
+- **Existing suites:** the other 514 unit tests pass.
+
+### 20.7 Implementation notes (Stage 4 calibration, 2026-10-13)
+The day-long soak drove several changes from the approved design. Each was measured, and the requirement-level ones were decided by the user (D31–D39). The remaining calibration choices (the energy bypass lane, K2 on drive-through units only, no staging at chargers and pumps, a backlog of 9 per gate, the 30 s flight floor) were approved on 2026-10-13.
+
+| Area | As designed | As built | Why |
+|---|---|---|---|
+| K2 release rule | Every bay type | **Drive-through units only** (return lanes, wash, gates): free the unit once the leaver's front is off its lane. Service, chargers, pumps and the tow hand-off keep the whole-body rule. | Early release at stalls and bays let the next car in while the previous one was still manoeuvring out, which jammed (wash-tunnel-down preset). A "leaver must be moving" variant made the day runs worse (10 failures vs 8) and was dropped. |
+| K3 staging | Return lanes, wash, chargers, pumps, gates | **Return lanes, wash and gates** (`STAGED` in `world.ts`) | A car staged behind a charger or pump could wait 20+ minutes while another unit freed up, and the gridlock check flagged it. |
+| Gridlock check (D36) | A granted car should be moving | A car on its way to its unit counts as queued if it is stopped (≤ 0.1 m/s) **nose-to-tail (≤ 4 m) behind a queued car**, or while **a queued car still occupies its unit** (K2 leaver part-way out) | At the morning peak the wash queue backs up through the return lanes, and with gate 2 closed the energy queue backs up onto the wash exits. These are long queues, not deadlocks; the head of the line is still checked. |
+| Charge later (R-8, D33) | (not in design) | `shouldChargeLater(level, waiting)`: ≥ 50% and ≥ 4 waiting. The car takes `graph.route(from, lotQueue, 'fleet', avoid)`, where `avoid` is every unit lane, over the new **`energy_bypass`** edge: (170, −10) → (189, 8) → (189, 60) → (170, 72), at lane speed. | Heatwave charger spill-back jammed the wash exit. The first version routed skip cars through charger stalls (the shortest path), so `route()` gained an `avoid` set (cached per key) and the hub gained a bypass. |
+| Departure backlog | 10 per gate (M4) | **9 per gate** | 10 gave gate queues of 11–13 and a jam; 8 left seed 1 in rain at 88% served. |
+| Flight interval floor (K8) | 25 s, or 30 s if separation fails | **30 s** | At 25 s a pushback came within 43.8 m of an arrival. Gate claims also gained a `freeFrom` time, so an arrival never claims a gate before the departing jet has pushed back. |
+| Demand curve (D34) | Evening ×1.8 | **Evening ×1.4** (raw); normalised: ×1.68 morning, ×1.05 midday, ×1.47 evening | The evening counter backlog took 1–3+ hours to clear. Equal peaks (×1.4 both) only moved the backlog back to the evening. |
+| Exit gates (D38) | 2 | **2, now generated from `facility.exitGates`** (6 m pitch, centred; the building depth follows). A third gate was tried and reverted. | Saturated throughput was 28–30 cars/h with 2 or 3 gates. The limit is ready-car supply: free ready cars are ≈ 0 every hour on busy seeds, and a customer's walk to the car takes ≈ 20 hub minutes at 15×. 135 and 150 cars didn't clear the counter either (150 also pushed turnaround to 60–100 min). |
+| Warm start | Steps | **Sim-seconds based** (`PREROLL_SIM_SEC` = 1,800). The initial fleet's returns use no 30-minute minimum. | Otherwise the first 600 steps had no returns at all. |
+| Soak "served" (D39) | Checkouts ÷ expected demand (480 × weather) | Checkouts ÷ the pickups customers actually requested (checkouts + still waiting at the end − waiting at the start) | The seeds' random arrival counts differ by ±8%, so the expected-demand ratio ranged from 89% to 107% for the same service. |
+| Top bar (R-7) | Readout next to the clock | Unchanged, plus the grid now sizes the controls column to its content, and the search box (max 320 px) gives way first | At 1280 px the readout wrapped the controls onto a second line under the KPI cards, which blocked the area buttons (4 E2E failures). |
+
+### 20.8 Verified results (2026-10-13)
+- **Day-long soak** (seeds 1–3, 24 simulated hours, 2 gates, 120 cars). Overcast matches clear because it changes neither demand nor speed.
+
+  | Run | Turnaround | Utilisation | Served | Longest queue | Queues at 11:00 / 21:00 | Counter at 11:00 / 21:00 (not a target) |
+  |---|---|---|---|---|---|---|
+  | s1 clear | 43.8 min | 64.0% | 99.8% | 9 | 6 / 6 | 2 / 1 |
+  | s1 rain | 51.2 min | 67.3% | 97.6% | 10 | 3 / 6 | 14 / 22 |
+  | s2 clear | 40.4 min | 60.6% | 98.2% | 9 | 4 / 3 | 0 / 0 |
+  | s2 rain | 46.7 min | 63.6% | 98.4% | 10 | 6 / 2 | 5 / 0 |
+  | s3 clear | 41.6 min | 73.3% | 100.8% | 11 | 4 / 6 | 6 / 26 |
+  | s3 rain | 47.7 min | 72.0% | 91.8% | 9 | 4 / 4 | 18 / 58 |
+
+  All 9 Balanced runs meet §12.4 (≤ 45 min, or ≤ 55 in rain; 60–75%; ≥ 90%; ≤ 12; ≤ 8). The 3 heatwave runs pass (served ≥ 80%, evening queue ≤ 10), as do all 4 M4 presets (4 h, then reset and 2 h) and the M1 soaks: **28 of 28 soak tests**.
+- **Unit and integration:** 545 tests in 72 files, plus typecheck and lint, all green. Two new M7 tests cover D36: one for a nose-to-tail driver, and one for the gate-closure preset passing step 5,139 without a gridlock flag. Both fail with the rule removed.
+- **E2E:** 40 of 40, run on their own. The M5 patrol test now polls for movement instead of sampling after a fixed 1.5 s (under software WebGL a surge at the morning peak can stretch a frame past that).
+- **Simulation cost:** step ≈ 0.08 ms and snapshot ≈ 0.10 ms in Node at the morning peak (worst step + snapshot 0.65 ms), well within the §9.6 budget.
+- **Production bundle:** 222.3 KB gzipped (budget 600 KB), with no test hooks.
+
+## 21. M8: Ship & share (design approved 2026-10-13; implemented, awaiting review)
+
+Implements requirements §13 (SH-1…SH-15, D40–D47). The simulation, world and dashboard logic are unchanged. M8 adds:
+- a pure `src/share/` layer (link state, kiosk scheduler, caption and help text);
+- thin browser adapters (capture, clipboard, wake lock);
+- a few Preact components;
+- CI workflows and the docs files.
+
+### 21.1 Component breakdown
+| Module | Kind | Responsibility |
+|---|---|---|
+| `src/share/link.ts` | pure | `LinkState`, `parseLink(search)` and `formatLink(base, state)`, built from allow-lists derived from config (area ids, weather modes, preset ids, unit and facility ids). It has no DOM access. |
+| `src/share/kiosk.ts` | pure | `createKioskScheduler({ areas, dwellSec: 20, idleSec: 60 })`: wall-time state machine (touring, paused, exited) |
+| `src/share/caption.ts` | pure | The screenshot caption and file name, and the kiosk's live fact per area (reusing `facilityStatuses`) |
+| `src/share/help.ts` | pure | `SHORTCUTS`: the single list both the key handler and the help content read; `QUICK_HELP` is its first five entries |
+| `src/share/version.ts` | pure | `APP_VERSION` and `BUILD_DATE`, from Vite `define` (`__APP_VERSION__` from `package.json`, `__BUILD_DATE__` as an ISO date at build time) |
+| `src/app/capture.ts` | DOM | `captureFrame(source, caption, maxWidth)`: synchronous `drawImage` of the WebGL canvas into a 2D canvas, a caption strip, then `toBlob`; plus `downloadBlob(blob, name)` |
+| `src/app/clipboard.ts` | DOM | `copyText(text): Promise<boolean>`: the async Clipboard API, `false` on any failure (the UI then shows the fallback) |
+| `src/app/wakeLock.ts` | DOM | `requestWakeLock()` and `release()`: feature-detected, re-acquired on `visibilitychange`, and silent where unsupported |
+| `src/ui/m8/` | Preact | `HelpButton` (quick-help popover), `HelpDialog`, `CopyLinkDialog`, `Notice` (polite live region), `KioskCaption` (with the paused chip), `EmbedHud` |
+| `src/app/main.ts` | wiring | Applies the link at start-up, holds the UI `mode`, adds the key handler, wires the kiosk and screenshot into the frame loop, and adds test hooks |
+| `src/airport/flights.ts` | pure | Gains `nextTouchdown(t): number \| null` (airport seconds until the next landing) for the airport fact |
+| `.github/workflows/pages.yml`, `release.yml` | CI | SH-1, SH-2 |
+| `scripts/changelog-section.mjs` | Node | Prints one version's CHANGELOG section (release notes) |
+| `scripts/screenshots.ts` | Playwright | Regenerates `docs/media/*.jpg` for the README (`npm run screenshots`, run locally) |
+| `README.md`, `CHANGELOG.md`, `LICENSE` | docs | SH-13…SH-15 |
+
+### 21.2 Key decisions
+| # | Decision | Why |
+|---|---|---|
+| J1 | **Link parsing is pure and allow-listed.** `parseLink` returns `{ state: Partial<LinkState>; ignored: string[] }`. Each key has a validator: enums against config-derived lists, `seed` against `/^[A-Za-z0-9_-]{1,32}$/`, `cam` as 5 finite numbers clamped to `cameraLimits()`, and `select` against the unit and facility ids. The first occurrence of a duplicate key wins. Values never reach HTML except as text, which Preact escapes. | SH-5, SH-6. Unit-testable, and nothing a URL contains can inject markup or run code. |
+| J2 | **Link precedence at start-up:** seed → weather → time of day → theme and labels (in memory only) → quality pin → preset → area → select → camera. `cam` is ignored (and listed as ignored) when `select` is present, because selecting follows the object. Speed is applied last, so a paused link still shows the preset's effect at once (`applyVisible`). | D42 and S-15: the same link always produces the same state. |
+| J3 | **Preferences are not written by a link.** `theme` and `labels` from a link set the in-memory settings only. `saveTheme` and `saveFlag` are called only by the existing user handlers. | D42 |
+| J4 | **Copy link reads live state.** `formatLink(location.origin + location.pathname, currentLinkState())` omits defaults. The preset is included only while `activePreset` is set: `onPreset` sets it, and any other scenario command or Reset clears it. The camera comes from `rig.state()`, rounded (positions 0.1 m, angles 0.1°). | SH-7. A short, readable and exact link. |
+| J5 | **One `mode` signal (`'normal' \| 'embed' \| 'kiosk'`).** The Dashboard renders the top bar, KPIs, sheet and what-if drawer only in `normal`. Embed adds `EmbedHud`; kiosk adds `KioskCaption`. Facility labels follow the labels setting in every mode. The label declutter treats the HUD and caption as blockers. | One switch point, so panels can't leak into kiosk or embed. |
+| J6 | **Kiosk scheduler is wall-time and input-driven.** `tick(rawDt)` returns the area to fly to when a dwell ends. `input()` pauses and resets the 60 s idle countdown, and `exit()` ends it. The camera uses `rig.glideTo` (or `jump` with reduced motion) and MapControls' `autoRotate` (0.6°/s) while dwelling. Input listeners (pointerdown, wheel, touchstart, keydown) are passive and on `window`. | SH-9, SH-10. Testable without a browser, and the simulation is untouched. |
+| J7 | **Screenshot in the frame loop.** `P` or the button sets `captureRequested`. Right after `post.render()` in that frame, `captureFrame` copies the canvas with `drawImage`, synchronously, before the buffer is presented. That avoids `preserveDrawingBuffer` and its cost on every frame. Width is capped at 4096 px, with the aspect ratio kept. The caption strip is drawn with Canvas 2D text in the UI font. | SH-11: never blank, with no per-frame cost. |
+| J8 | **Downloads and clipboard work under the existing CSP.** `img-src data: blob:` already allows the image; the download is an `<a download>` on an object URL, revoked after the click. The clipboard needs no CSP change. No network request is made. | SH-4. The CSP is unchanged. |
+| J9 | **Keyboard map from `SHORTCUTS`.** `P` captures and `?` opens help; Esc exits kiosk, then closes dialogs, then clears the selection (existing). Keys are ignored while typing in an input. In an iframe the page only gets keys while it has focus. | SH-8, SH-12. The help text and the behaviour can't drift (a unit test compares them). |
+| J10 | **Quick help on hover.** `HelpButton` shows its popover on `pointerenter`/`focus` and hides on leave/blur. On `(hover: none)` devices it shows no popover, and a tap opens `HelpDialog`. The popover is linked with `aria-describedby`. `HelpDialog` is a `<dialog>` with focus return. | SH-12a (Q4) |
+| J11 | **CI order: check → E2E → production build → deploy.** `test:e2e` builds with `--mode test` into `dist/`. The production `npm run build` runs after it, so the deployed and released file never contains test hooks. Pages uses `actions/upload-pages-artifact` + `actions/deploy-pages` with `permissions: { pages: write, id-token: write }` and `concurrency: pages`. Release uses `contents: write` and the `gh` CLI, and checks `GITHUB_REF_NAME == "v" + package.json version`. Node 22, `npm ci`, `npx playwright install --with-deps chromium`. | SH-1, SH-2: least privilege, and no test hooks in published files. |
+| J12 | **Version compiled in.** `package.json` is 0.8.0. Vite's `define` injects the version and build date, typed in `src/env.d.ts`. | SH-3 |
+
+### 21.3 Contracts
+```ts
+// share/link.ts
+type SpeedLink = 0 | 15 | 30 | 45;                       // ↔ Speed 0 | 1 | 2 | 3
+interface CamLink { x: number; z: number; azimuthDeg: number; elevationDeg: number; distance: number } // elevation = 90° − polar
+interface LinkState {
+  area: AreaId; cam: CamLink | null; weather: WeatherMode; tod: DayNight; speed: SpeedLink;
+  labels: boolean | null; theme: Theme | null; quality: 'auto' | 0 | 1 | 2; seed: string;
+  preset: PresetId | null; select: string | null; kiosk: boolean; embed: boolean;
+}
+const LINK_DEFAULTS: LinkState
+parseLink(search: string): { state: Partial<LinkState>; ignored: readonly string[] }
+formatLink(base: string, state: LinkState): string        // defaults omitted, fixed key order
+// share/kiosk.ts
+interface KioskState { phase: 'touring' | 'paused' | 'exited'; area: AreaId; dwellLeftSec: number; resumeInSec: number | null }
+createKioskScheduler(opts: { areas: readonly AreaId[]; dwellSec: number; idleSec: number }): {
+  tick(dtSec: number): AreaId | null;                       // the area to fly to now, if the dwell ended or the tour resumed
+  input(): void; exit(): void; state(): KioskState;
+}
+// share/caption.ts
+screenshotCaption(p: { area: string; clock: string; weather: string }): string
+screenshotFileName(d: Date): string                         // goldlane-hub-YYYYMMDD-HHMMSS.png (local time)
+kioskFact(area: AreaId, snap: Snapshot, nextLandingSec: number | null): string
+// share/help.ts
+interface Shortcut { keys: string; action: string; key?: string }   // `key` set when handled by the key handler
+const SHORTCUTS: readonly Shortcut[]; const QUICK_HELP: readonly Shortcut[]
+// app/capture.ts
+captureFrame(source: HTMLCanvasElement, caption: string, maxWidth?: number): Promise<Blob>
+downloadBlob(blob: Blob, fileName: string): void
+// app/clipboard.ts
+copyText(text: string): Promise<boolean>
+// airport/flights.ts
+FlightSchedule.nextTouchdown(t: number): number | null
+// test hooks (test builds only): mode(), link(), kiosk(), help(): boolean
+```
+
+### 21.4 Security
+| Risk | Mitigation |
+|---|---|
+| Malicious query strings (markup injection, absurd numbers) | J1: allow-lists, a regex for `seed`, finite and clamped numbers, ids checked against known sets. Ignored keys are logged as text. No `innerHTML` anywhere on the M8 paths. |
+| Clickjacking through the embed | The page has no account, data entry or privileged actions; the worst case is a misleading frame around a demo. It is accepted and documented (SH-8): a `<meta>` CSP can't set `frame-ancestors`, and Pages can't set headers. |
+| "Open full view" opening an untrusted target | Built from our own `location` and `formatLink`, `target="_blank" rel="noopener noreferrer"` |
+| CI supply chain | `npm ci` against the lockfile, least-privilege `permissions` per workflow, no secrets beyond `GITHUB_TOKEN`, and only first-party `actions/*` (major-version tags; pinning to SHAs is noted as an option) |
+| Publishing by accident | Workflows run only on the user's push or tag. Pages needs the user to enable it in the settings. Release checks the tag against the version. |
+| Leaking test hooks | J11: the deployed and released file comes from the production build, and an E2E test already asserts `__hub` is absent in production (M1) |
+
+### 21.5 Performance
+- **Kiosk:** O(1) per frame. The orbit uses MapControls' built-in auto-rotate, with no extra render passes.
+- **Screenshot:** one `drawImage` (≈ 5–20 ms at 4K under software rendering) and an async PNG encode, only when requested. Nothing per frame.
+- **Embed and kiosk:** they hide DOM panels, so fewer label blockers, and the draw calls are unchanged (budgets checked in E2E).
+- **Bundle:** an estimated +8–12 KB gzipped (components, help text, link tables), within the +15 KB budget.
+
+### 21.6 Test plan (Stage 3 preview)
+| Layer | What's tested |
+|---|---|
+| Unit: `share/link` | Each key valid and invalid; duplicates (first wins); unknown keys ignored; `cam` clamped; seed regex; `formatLink` omits defaults and has a stable order; parse(format(s)) = s for random valid states (seeded); speed mapping |
+| Unit: `share/kiosk` | Order and wrap-around; 20 s dwell; input pauses and resets the 60 s countdown; the tour resumes on the next area; exit is final |
+| Unit: `share/caption` | Caption text; file name from a fixed local date; the fact per area (from a fixture snapshot); "Next landing in 0:40" formatting |
+| Unit: `share/help` | Every key-handled shortcut appears in `SHORTCUTS`, and `QUICK_HELP` is a subset |
+| Unit: `airport/flights` | `nextTouchdown` equals the gap to the next approach → landing phase change across a day |
+| Unit: UI | `HelpButton` popover on hover/focus and the dialog on click; `HelpDialog` focus trap and Esc; `CopyLinkDialog` shows the link selected; `KioskCaption` paused chip and exit; `EmbedHud` "Open full view" href drops `embed`; Dashboard hides the panels in embed and kiosk |
+| Unit: workflows | Both YAML files exist; Pages runs check → E2E → build → deploy in that order; Release checks the tag against the version and attaches `goldlane-hub-<version>.html` |
+| E2E (`tests/e2e/m8.spec.ts`) | A deep link applies area, weather, time of day, speed, labels, preset and select, and leaves `localStorage` unchanged; invalid values fall back without errors; Copy link round-trips; embed mode shows the HUD only; kiosk moves on after 20 s (fast-forwarded with a test hook), pauses on input and exits on Esc; `P` downloads a PNG of the canvas size that isn't one colour; `?` opens help and Esc closes it; draw calls in embed and kiosk stay in budget |
+
+### 21.7 Risks
+| Risk | Mitigation |
+|---|---|
+| `drawImage` of a WebGL canvas returns blank in some browsers when not done in the same task as the render | J7 captures in the same frame, right after `post.render()`. The E2E test checks that the PNG isn't uniform. |
+| The Clipboard API is refused (`file://`, iframe without permission) | The `copyText` → `false` → `CopyLinkDialog` fallback (SH-7) |
+| Wake Lock is unsupported (Firefox, `file://`) | Feature-detected and silent (SH-9) |
+| CI E2E on the hosted runner is slower than locally (software WebGL) | Tests already poll rather than sleep. A 20-minute job timeout. Playwright's retries stay at 0, so real failures surface. |
+| The first Pages deploy fails until Pages is enabled | It's documented in the README and in §13.2 as a user step |
+
+### 21.8 Stage 3 status (2026-10-13)
+- **Contracts, stubbed and typed:**
+  - `share/link`, `share/kiosk`, `share/caption`, `share/help`, `share/version`
+  - `app/clipboard`, `app/capture`, `app/wakeLock`
+  - `ui/m8`: `HelpButton`, `HelpDialog`, `CopyLinkDialog`, `Notice`, `KioskCaption`, `EmbedHud`, plus `types` (`UiMode`, `ShareState`, `ShareActions`)
+  - `FlightSchedule.nextTouchdown`
+  - `TopBar` gains `onCopyLink`, `onStartTour`, `onScreenshot` and `onOpenHelp`; `Dashboard` gains `share` and `shareActions`. `main.ts` passes placeholders.
+  - Test hooks: `mode`, `link`, `kiosk`, `advanceKiosk`, `help`
+- **Failing tests:**
+  - **Unit:** 70 failing tests in 9 files (link 19, kiosk 8, caption 6, help/version/licence 5, clipboard 3, publishing 10, M8 components and Dashboard modes 15, TopBar 3, flights 1).
+  - **E2E:** 7 failing in `tests/e2e/m8.spec.ts`.
+- **Tests that pass already**, because they pin facts that hold today:
+  - the kiosk constants;
+  - the Dashboard in normal mode;
+  - a closed help dialog renders nothing;
+  - "every handled key is listed once" (vacuous until shortcuts exist);
+  - an unknown changelog version fails (the script is missing);
+  - invalid link values fall back to defaults (links are ignored today).
+- **Existing suites:** the other 550 unit tests pass, and typecheck and lint are clean.
+- **Test-only changes to existing files:** `TopBar.test.tsx` passes the four new handlers in its setup.
+
+### 21.9 Implementation notes (Stage 4, 2026-10-13)
+| Area | As designed | As built | Why |
+|---|---|---|---|
+| Dialogs (J10) | `<dialog>` element | `div role="dialog" aria-modal="true"` with a shared hook (`ui/m8/dialog.ts`): focus moves in, Tab wraps, Esc closes (and stops there), and focus returns on close | Works the same in jsdom and every target browser, and one implementation serves both dialogs |
+| Kiosk caption | Area, clock, demand, fact | The clock and the paused chip are `aria-hidden`, so the polite live region isn't re-announced every tick. On the overview the demand shows once, because the fact is the demand readout itself. | Accessibility and a cleaner caption |
+| Copy link (J4) | Current state | `labels` is carried only when off and `theme` only when light (the defaults most viewers have). The link base is `location.href` without query or hash. | Short links; `location.origin` is "null" on `file://` |
+| Mode precedence | (not specified) | If a link has both `kiosk=1` and `embed=1`, kiosk wins | Kiosk is the more specific presentation |
+| Rig (J6) | MapControls auto-rotate | `CameraRig.setAutoRotate(degPerSec)`. `controls.update(dt)` now receives the frame time, so the orbit runs in real seconds (three r186: speed 1 = 6°/s). | The orbit speed is independent of frame rate |
+| Airport fact | `nextTouchdown(t)` | Touchdown times are recorded in the built schedule (only arrivals that land, not diverted extras), and `AirportView.nextLandingSec()` exposes them | Exact, with no sampling |
+| Brand | Caption text | `brand.siteName = 'Pacific Gateway'` | All brand strings stay in one config (N-7) |
+| Tooling | — | `npm run screenshots` (`scripts/screenshots.mjs`, Playwright against the test build); `scripts/*.mjs` linted without type information | Reproducible README images |
+| E2E robustness | — | M5's draw-call test now waits for a tier-2 frame (polls `patrolPose() === null`) instead of a fixed 800 ms, before checking ≤ 150 draw calls | It failed once in a full run when a software-WebGL frame took longer than 800 ms; the check is now stricter, not looser |
+
+### 21.10 Verified results (2026-10-13)
+- **Unit and integration:** 620 tests in 79 files, plus typecheck and lint, all green. This includes the 70 M8 tests from Stage 3, which all pass.
+- **E2E:** 48 of 48, including the 8 M8 tests:
+  - a deep link applies the view and leaves saved preferences untouched;
+  - invalid values fall back without errors;
+  - Copy link round-trips;
+  - embed shows the HUD only, within the draw-call budget;
+  - kiosk tours, pauses on input and exits with Esc;
+  - Start tour enters kiosk mode;
+  - `P` downloads a PNG of the canvas size;
+  - help appears on hover, opens with `?` and closes with Esc.
+- **Soak:** 28 of 28 (unchanged simulation).
+- **Production bundle:** 228.7 KB gzipped (budget 600 KB; +6.4 KB over M7, within the +15 KB M8 budget), with no test hooks.
+- **Workflows:** shape and order are pinned by unit tests. They run for real only after the user pushes: Pages needs "Settings → Pages → Source: GitHub Actions", and a Release needs a pushed `v0.8.0` tag.
+

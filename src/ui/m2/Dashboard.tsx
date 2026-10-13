@@ -26,6 +26,15 @@ import { KpiCards } from './KpiCards';
 import { LiveTable } from './LiveTable';
 import { ProcessTracker } from './ProcessTracker';
 import { TopBar } from './TopBar';
+import { APP_VERSION, BUILD_DATE } from '../../share/version';
+import { demandText } from '../demand';
+import { formatClock } from '../format';
+import { CopyLinkDialog } from '../m8/CopyLinkDialog';
+import { EmbedHud } from '../m8/EmbedHud';
+import { HelpDialog } from '../m8/HelpDialog';
+import { KioskCaption } from '../m8/KioskCaption';
+import { Notice } from '../m8/Notice';
+import type { ShareActions, ShareState } from '../m8/types';
 
 /** Everything the panels show, refreshed by the render loop (architecture §15.1). */
 export interface DashboardData {
@@ -85,6 +94,9 @@ export interface DashboardProps {
   readonly onFacility: (id: FacilityId) => void;
   /** Flies the camera to an airport place (L-1). */
   readonly onPlace: (id: PlaceId) => void;
+  /** M8 (§21 J5): display mode, kiosk caption, notices and dialogs. */
+  readonly share: Signal<ShareState>;
+  readonly shareActions: ShareActions;
 }
 
 /** What-if wiring (§9): levers go to the visible simulation only; speed to both (W7–W9). */
@@ -113,92 +125,112 @@ export function Dashboard(props: DashboardProps): JSX.Element {
   const settings = props.settings.value;
   const selection = props.store.selection.value;
   const vehicleId = selection?.kind === 'agent' && data.steps ? selection.id : null;
+  const share = props.share.value;
+  const actions = props.shareActions;
+  // Embed and kiosk show the world plus one compact overlay; panels exist only in normal mode (J5).
+  const normal = share.mode === 'normal';
+  const clock = data.snapshot ? formatClock(data.snapshot.clockHours) : '--:--';
+  const demand = data.snapshot ? demandText(data.snapshot.demand) : '';
 
   return (
-    <div class="dashboard">
+    <div class="dashboard" data-mode={share.mode}>
       {settings.labels ? <FacilityLabels statuses={data.facilities} compact={data.compactLabels} onSelect={props.onFacility} places={data.places} onPlace={props.onPlace} /> : null}
-      <TopBar
-        snapshot={data.snapshot}
-        unitIds={props.unitIds}
-        areas={hub.areas}
-        activeArea={props.store.area.value}
-        onArea={props.onArea}
-        weather={settings.weather}
-        onWeather={props.onWeather}
-        dayNight={settings.dayNight}
-        onDayNight={props.onDayNight}
-        theme={settings.theme}
-        onTheme={props.onTheme}
-        alerts={data.alerts}
-        unread={data.unread}
-        onOpenAlerts={props.onOpenAlerts}
-        onAlert={(a) => {
-          if (a.vehicleId) props.onSelectVehicle(a.vehicleId);
-          else if (a.unitId) props.onSelectUnit(a.unitId);
-        }}
-        onPick={props.onPick}
-        speed={settings.speed}
-        onSpeed={props.scenario.onSpeed}
-        chips={data.snapshot ? scenarioChips(data.snapshot.scenario) : []}
-        onOpenWhatIf={() => {
-          setWhatIfOpen(true);
-        }}
-        labelsOn={settings.labels}
-        onLabels={props.onLabels}
-      />
-      <KpiCards cards={data.cards} deltas={data.deltas} />
-      {data.snapshot ? (
-        <WhatIfDrawer
-          open={whatIfOpen}
-          onClose={() => {
-            setWhatIfOpen(false);
-          }}
-          view={data.snapshot.scenario}
-          outages={props.scenario.outages}
-          offlineReason={props.scenario.offlineReason}
-          queues={data.queues}
-          baselineQueues={data.baselineQueues}
-          onSurge={props.scenario.onSurge}
-          onCrew={props.scenario.onCrew}
-          onSetOnline={props.scenario.onSetOnline}
-          onPreset={props.scenario.onPreset}
-          onReset={props.scenario.onReset}
-        />
-      ) : null}
-      <div class="sheet" data-testid="bottom-sheet" data-open={sheetOpen ? 'true' : 'false'}>
-        <button
-          type="button"
-          class="sheet-handle"
-          aria-label={sheetOpen ? 'Collapse panels' : 'Expand panels'}
-          aria-expanded={sheetOpen ? 'true' : 'false'}
-          onClick={() => {
-            setSheetOpen(!sheetOpen);
-          }}
-        >
-          <span aria-hidden="true" />
-        </button>
-        <div class="sheet-detail">
-          <DetailPanel
-            selection={selection}
+      {share.mode === 'embed' ? <EmbedHud clock={clock} demand={demand} fullViewHref={share.fullViewHref} /> : null}
+      {share.mode === 'kiosk' && share.kiosk ? <KioskCaption view={share.kiosk} onExit={actions.onExitTour} /> : null}
+      <Notice text={share.notice} />
+      <HelpDialog open={share.helpOpen} onClose={actions.onCloseHelp} version={APP_VERSION} buildDate={BUILD_DATE} />
+      {share.copyFallback !== null ? <CopyLinkDialog link={share.copyFallback} onClose={actions.onCloseCopyFallback} /> : null}
+      {normal ? (
+        <>
+          <TopBar
             snapshot={data.snapshot}
-            throughput={props.throughput}
-            onClose={() => {
-              props.store.clearSelection();
+            unitIds={props.unitIds}
+            areas={hub.areas}
+            activeArea={props.store.area.value}
+            onArea={props.onArea}
+            weather={settings.weather}
+            onWeather={props.onWeather}
+            dayNight={settings.dayNight}
+            onDayNight={props.onDayNight}
+            theme={settings.theme}
+            onTheme={props.onTheme}
+            alerts={data.alerts}
+            unread={data.unread}
+            onOpenAlerts={props.onOpenAlerts}
+            onAlert={(a) => {
+              if (a.vehicleId) props.onSelectVehicle(a.vehicleId);
+              else if (a.unitId) props.onSelectUnit(a.unitId);
             }}
-            unitControl={{
-              offlineReason: props.scenario.offlineReason,
-              isOutageable: props.scenario.isOutageable,
-              onSetOnline: props.scenario.onSetOnline,
+            onPick={props.onPick}
+            speed={settings.speed}
+            onSpeed={props.scenario.onSpeed}
+            chips={data.snapshot ? scenarioChips(data.snapshot.scenario) : []}
+            onOpenWhatIf={() => {
+              setWhatIfOpen(true);
             }}
+            demand={data.snapshot?.demand ?? null}
+            labelsOn={settings.labels}
+            onLabels={props.onLabels}
+            onCopyLink={actions.onCopyLink}
+            onStartTour={actions.onStartTour}
+            onScreenshot={actions.onScreenshot}
+            onOpenHelp={actions.onOpenHelp}
           />
-        </div>
-        <div class="sheet-tracker">
-          <ProcessTracker vehicleId={vehicleId} steps={vehicleId ? data.steps : null} stageCounts={data.stageCounts} clockAt={props.clockAt} />
-        </div>
-        <div class="sheet-table">
-          <LiveTable fleet={tables.fleet} queue={tables.queue} checkouts={tables.checkouts} onSelect={props.onSelectVehicle} clockAt={props.clockAt} />
-        </div>
-      </div>
+          <KpiCards cards={data.cards} deltas={data.deltas} />
+          {data.snapshot ? (
+            <WhatIfDrawer
+              open={whatIfOpen}
+              onClose={() => {
+                setWhatIfOpen(false);
+              }}
+              view={data.snapshot.scenario}
+              outages={props.scenario.outages}
+              offlineReason={props.scenario.offlineReason}
+              queues={data.queues}
+              baselineQueues={data.baselineQueues}
+              onSurge={props.scenario.onSurge}
+              onCrew={props.scenario.onCrew}
+              onSetOnline={props.scenario.onSetOnline}
+              onPreset={props.scenario.onPreset}
+              onReset={props.scenario.onReset}
+            />
+          ) : null}
+          <div class="sheet" data-testid="bottom-sheet" data-open={sheetOpen ? 'true' : 'false'}>
+            <button
+              type="button"
+              class="sheet-handle"
+              aria-label={sheetOpen ? 'Collapse panels' : 'Expand panels'}
+              aria-expanded={sheetOpen ? 'true' : 'false'}
+              onClick={() => {
+                setSheetOpen(!sheetOpen);
+              }}
+            >
+              <span aria-hidden="true" />
+            </button>
+            <div class="sheet-detail">
+              <DetailPanel
+                selection={selection}
+                snapshot={data.snapshot}
+                throughput={props.throughput}
+                onClose={() => {
+                  props.store.clearSelection();
+                }}
+                unitControl={{
+                  offlineReason: props.scenario.offlineReason,
+                  isOutageable: props.scenario.isOutageable,
+                  onSetOnline: props.scenario.onSetOnline,
+                }}
+              />
+            </div>
+            <div class="sheet-tracker">
+              <ProcessTracker vehicleId={vehicleId} steps={vehicleId ? data.steps : null} stageCounts={data.stageCounts} clockAt={props.clockAt} />
+            </div>
+            <div class="sheet-table">
+              <LiveTable fleet={tables.fleet} queue={tables.queue} checkouts={tables.checkouts} onSelect={props.onSelectVehicle} clockAt={props.clockAt} />
+            </div>
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }

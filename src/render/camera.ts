@@ -13,6 +13,8 @@ export interface CameraRig {
   state(): CameraState;
   /** Sets the camera instantly (start-up). */
   jump(state: CameraState): void;
+  /** Slow orbit around the target (M8 kiosk, J6); 0 stops it. Degrees per second. */
+  setAutoRotate(degPerSec: number): void;
 }
 
 const FOLLOW_STIFFNESS = 5;
@@ -68,7 +70,8 @@ export function createCameraRig(camera: PerspectiveCamera, dom: HTMLElement, lim
         apply(clampState(r.state, limits));
         return;
       }
-      controls.update();
+      // dt drives auto-rotation in real seconds (three: autoRotateSpeed 1 = 6°/s with a delta).
+      controls.update(dt);
       let s = read();
       const p = follow?.();
       if (p) s = followTarget(s, p, dt, FOLLOW_STIFFNESS);
@@ -87,6 +90,10 @@ export function createCameraRig(camera: PerspectiveCamera, dom: HTMLElement, lim
       glide = null;
       apply(clampState(s, limits));
       controls.update();
+    },
+    setAutoRotate(degPerSec) {
+      controls.autoRotate = degPerSec !== 0;
+      controls.autoRotateSpeed = degPerSec / 6;
     },
   };
 }

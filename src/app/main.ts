@@ -2,7 +2,8 @@ import { signal } from '@preact/signals';
 import { h, render } from 'preact';
 import { Raycaster, Vector2, Vector3 } from 'three';
 import { rates } from '../config/rates';
-import type { WeatherMode } from '../config/weather';
+import type { PresetId } from '../config/scenarios';
+import { weather as weatherTable, type WeatherMode } from '../config/weather';
 import { hub, type AreaId } from '../layout/hub';
 import { areaById, unitMarker, unitPose } from '../layout/positions';
 import { createAgentLayer } from '../render/agents';
@@ -56,6 +57,15 @@ import { loadTheme, saveTheme, type Theme, type ThemeStorage } from '../ui/theme
 import { createThroughputTracker } from '../ui/throughput';
 import { createTimeline } from '../ui/timeline';
 import { createAccumulator } from './loop';
+import { kioskFact, screenshotCaption, screenshotFileName } from '../share/caption';
+import { SHORTCUTS } from '../share/help';
+import { KIOSK_AREAS, KIOSK_DWELL_SEC, KIOSK_IDLE_SEC, createKioskScheduler, type KioskScheduler } from '../share/kiosk';
+import { LINK_DEFAULTS, formatLink, parseLink, toSpeed, toSpeedLink, type LinkState } from '../share/link';
+import { demandText } from '../ui/demand';
+import type { KioskView, ShareActions, ShareState, UiMode } from '../ui/m8/types';
+import { captureFrame, downloadBlob } from './capture';
+import { copyText } from './clipboard';
+import { requestWakeLock, type WakeLockHandle } from './wakeLock';
 import type { HubTestHooks } from './testHooks';
 import { hasWebGL2 } from './webgl';
 
@@ -67,6 +77,15 @@ const PANEL_REFRESH_SEC = 0.1;
 /** Table refresh (architecture §5). */
 const TABLE_REFRESH_SEC = 0.25;
 const SELECT_DISTANCE = 90;
+/** Kiosk orbit while dwelling on an area (J6), degrees per second. */
+const KIOSK_ORBIT_DEG = 0.6;
+/** How long a "Link copied" style notice stays (ms). */
+const NOTICE_MS = 2_500;
+/** Longest wall-time step the kiosk takes from one frame (a stalled tab does not skip areas). */
+const KIOSK_MAX_STEP_SEC = 5;
+const DEG = 180 / Math.PI;
+const typing = (t: EventTarget | null): boolean =>
+  t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement || (t instanceof HTMLElement && t.isContentEditable);
 
 function showFallback(root: HTMLElement): void {
   root.innerHTML = '';
@@ -91,13 +110,18 @@ const prefersReducedMotion = (): boolean => typeof matchMedia === 'function' && 
 
 function start(root: HTMLElement): void {
   const storage = safeStorage();
-  let theme: Theme = loadTheme(storage);
+  // Deep link (SH-5, J1–J3): read once at start; it never writes the viewer's saved preferences.
+  const parsed = parseLink(location.search);
+  if (parsed.ignored.length > 0) console.info(`Ignored link options: ${parsed.ignored.join(', ')}`);
+  const link: LinkState = { ...LINK_DEFAULTS, ...parsed.state };
+  let theme: Theme = link.theme ?? loadTheme(storage);
   document.documentElement.dataset.theme = theme;
   const paletteFor = (t: Theme) => (t === 'light' ? lightPalette : darkPalette);
 
-  const sim = createSim({ seed: 'goldlane' });
+  const sim = createSim({ seed: link.seed });
   // Shadow baseline (S-11, W7): same seed, same weather and speed, never any scenario lever.
-  const baseline = createSim({ seed: 'goldlane' });
+  const baseline = createSim({ seed: link.seed });
+  if (link.weather !== LINK_DEFAULTS.weather) for (const s of [sim, baseline]) s.apply({ type: 'setWeather', mode: link.weather });
   const weatherMemory = createWeatherMemory();
   const outages = outageGroups();
   const store = createUiStore();
@@ -169,7 +193,7 @@ function start(root: HTMLElement): void {
   kpis.observe(sim.metrics(), curr.simTimeSec);
 
   let weatherMode: WeatherMode = curr.weather;
-  let dayNight: DayNight = 'auto';
+  let dayNight: DayNight = link.tod;
   const reducedMotion = prefersReducedMotion();
   let environment: Environment = environmentFor(weatherMode, curr.clockHours, dayNight, { reducedMotion, qualityTier });
 
@@ -211,8 +235,138 @@ function start(root: HTMLElement): void {
   const tableData = (): TableData => ({ fleet: fleetRows(curr), queue: queueRows(curr), checkouts: checkoutLog.rows() });
 
   // Settings first: dashboardData() reads the labels switch.
-  const settings = signal<Settings>({ weather: weatherMode, dayNight, theme, speed: 1, labels: loadFlag(storage, LABELS_KEY, true) });
+  const settings = signal<Settings>({ weather: weatherMode, dayNight, theme, speed: 1, labels: link.labels ?? loadFlag(storage, LABELS_KEY, true) });
   const data = signal<DashboardData>(dashboardData());
+
+  // ---------- share: links, kiosk, screenshot, help (M8, §21) ----------
+
+  /** The page itself, without query or hash; location.origin is "null" on file://. */
+  const linkBase = location.href.split(/[?#]/)[0] ?? '';
+  let mode: UiMode = link.kiosk ? 'kiosk' : link.embed ? 'embed' : 'normal';
+  const share = signal<ShareState>({ mode, kiosk: null, fullViewHref: '', notice: null, copyFallback: null, helpOpen: false });
+  const patchShare = (patch: Partial<ShareState>): void => {
+    share.value = { ...share.value, ...patch };
+  };
+  let noticeTimer: ReturnType<typeof setTimeout> | null = null;
+  const showNotice = (text: string): void => {
+    patchShare({ notice: text });
+    if (noticeTimer) clearTimeout(noticeTimer);
+    noticeTimer = setTimeout(() => {
+      patchShare({ notice: null });
+    }, NOTICE_MS);
+  };
+
+  /** The preset in force, untouched since it was applied (J4); any other lever or Reset clears it. */
+  let activePreset: PresetId | null = null;
+  /** What "Copy link" captures now (SH-7, J4). */
+  const currentLinkState = (): LinkState => {
+    const sel = store.selection.value;
+    const cam = rig.state();
+    return {
+      area: store.area.value,
+      // A selected unit decides the camera (it is followed), so the link carries the selection instead (J2).
+      cam: sel?.kind === 'resource' ? null : { x: cam.target.x, z: cam.target.z, azimuthDeg: cam.azimuth * DEG, elevationDeg: 90 - cam.polar * DEG, distance: cam.distance },
+      weather: weatherMode,
+      tod: dayNight,
+      speed: toSpeedLink(speed),
+      labels: settings.value.labels ? null : false,
+      theme: theme === 'light' ? 'light' : null,
+      quality: pinnedTier === 0 || pinnedTier === 1 || pinnedTier === 2 ? pinnedTier : 'auto',
+      seed: link.seed,
+      preset: activePreset,
+      select: sel?.kind === 'resource' ? sel.id : null,
+      kiosk: mode === 'kiosk',
+      embed: mode === 'embed',
+    };
+  };
+  const currentLink = (): string => formatLink(linkBase, currentLinkState());
+  const fullViewHref = (): string => formatLink(linkBase, { ...currentLinkState(), embed: false, kiosk: false });
+
+  let kiosk: KioskScheduler | null = null;
+  let wakeLock: WakeLockHandle | null = null;
+  const KIOSK_INPUTS = ['pointerdown', 'wheel', 'touchstart', 'keydown'] as const;
+  /** Any viewer input pauses the tour (SH-10); Esc is left to the key handler, which exits. */
+  const kioskInput = (e: Event): void => {
+    if (!kiosk || (e instanceof KeyboardEvent && e.key === 'Escape')) return;
+    kiosk.input();
+    rig.setAutoRotate(0);
+  };
+  const kioskFly = (id: AreaId): void => {
+    onArea(id);
+    rig.setAutoRotate(reducedMotion ? 0 : KIOSK_ORBIT_DEG);
+  };
+  const kioskView = (): KioskView | null => {
+    if (!kiosk) return null;
+    const k = kiosk.state();
+    return {
+      area: areaById(k.area).label,
+      clock: formatClock(curr.clockHours),
+      demand: demandText(curr.demand),
+      fact: kioskFact(k.area, curr, airport.nextLandingSec()),
+      resumeInSec: k.resumeInSec,
+    };
+  };
+  const enterKiosk = (): void => {
+    if (kiosk) return;
+    kiosk = createKioskScheduler({ areas: KIOSK_AREAS, dwellSec: KIOSK_DWELL_SEC, idleSec: KIOSK_IDLE_SEC });
+    mode = 'kiosk';
+    for (const t of KIOSK_INPUTS) window.addEventListener(t, kioskInput, { passive: true });
+    wakeLock = requestWakeLock();
+    kioskFly(kiosk.state().area);
+    patchShare({ mode, kiosk: kioskView(), helpOpen: false });
+  };
+  const exitKiosk = (): void => {
+    if (!kiosk) return;
+    kiosk.exit();
+    kiosk = null;
+    for (const t of KIOSK_INPUTS) window.removeEventListener(t, kioskInput);
+    wakeLock?.release();
+    wakeLock = null;
+    rig.setAutoRotate(0);
+    mode = 'normal';
+    patchShare({ mode, kiosk: null });
+  };
+  const kioskStep = (sec: number): void => {
+    const next = kiosk?.tick(sec) ?? null;
+    if (next) kioskFly(next);
+  };
+
+  /** Set by P or the button; the frame loop captures right after rendering (J7). */
+  let captureRequested = false;
+  const takeScreenshot = (): void => {
+    const caption = screenshotCaption({ area: areaById(store.area.value).label, clock: formatClock(curr.clockHours), weather: weatherTable[weatherMode].label });
+    captureFrame(canvas, caption)
+      .then((blob) => {
+        downloadBlob(blob, screenshotFileName(new Date()));
+      })
+      .catch(() => {
+        showNotice('Screenshot failed');
+      });
+  };
+
+  const shareActions: ShareActions = {
+    onCopyLink: () => {
+      const url = currentLink();
+      void copyText(url).then((ok) => {
+        if (ok) showNotice('Link copied');
+        else patchShare({ copyFallback: url });
+      });
+    },
+    onCloseCopyFallback: () => {
+      patchShare({ copyFallback: null });
+    },
+    onStartTour: enterKiosk,
+    onExitTour: exitKiosk,
+    onScreenshot: () => {
+      captureRequested = true;
+    },
+    onOpenHelp: () => {
+      patchShare({ helpOpen: true });
+    },
+    onCloseHelp: () => {
+      patchShare({ helpOpen: false });
+    },
+  };
   const tables = signal<TableData>(tableData());
 
   // ---------- what-if commands (§9, W8) ----------
@@ -236,7 +390,27 @@ function start(root: HTMLElement): void {
     settings.value = { ...settings.value, weather: mode };
   };
   const scenarioCommand = (command: ScenarioCommand): void => {
+    activePreset = null;
     applyVisible([command]);
+  };
+  const applyPreset = (id: PresetId): void => {
+    const plan = presetCommands(id);
+    weatherMemory.onPreset(weatherMode, plan.weather);
+    const commands: Command[] = [...plan.commands];
+    if (plan.weather) {
+      commands.push({ type: 'setWeather', mode: plan.weather });
+      setVisibleWeather(plan.weather);
+    }
+    applyVisible(commands);
+    activePreset = id;
+  };
+  const flyToFacility = (id: FacilityId): void => {
+    // Fly there without selecting a bay (Q2); clearing the selection also stops any follow.
+    const f = FACILITIES.find((x) => x.id === id);
+    const b = f ? hub.buildings.find((x) => x.id === f.building) : undefined;
+    if (!f || !b) return;
+    store.clearSelection();
+    rig.glideTo({ x: b.x, z: b.z }, f.distance);
   };
 
   const onArea = (id: AreaId): void => {
@@ -298,17 +472,12 @@ function start(root: HTMLElement): void {
         store.clearSelection();
         rig.glideTo({ x: anchor.x, z: anchor.z }, place.distance);
       },
-      onFacility: (id: FacilityId) => {
-        // Fly there without selecting a bay (Q2); clearing the selection also stops any follow.
-        const f = FACILITIES.find((x) => x.id === id);
-        const b = f ? hub.buildings.find((x) => x.id === f.building) : undefined;
-        if (!f || !b) return;
-        store.clearSelection();
-        rig.glideTo({ x: b.x, z: b.z }, f.distance);
-      },
+      onFacility: flyToFacility,
       onSelectUnit: (id: string) => {
         store.select({ kind: 'resource', id });
       },
+      share,
+      shareActions,
       scenario: {
         outages,
         offlineReason: (unitId: string) => offlineReason(curr.scenario, unitId),
@@ -322,17 +491,9 @@ function start(root: HTMLElement): void {
         onSetOnline: (unitId, online) => {
           scenarioCommand({ type: 'setUnitOnline', unitId, online });
         },
-        onPreset: (id) => {
-          const plan = presetCommands(id);
-          weatherMemory.onPreset(weatherMode, plan.weather);
-          const commands: Command[] = [...plan.commands];
-          if (plan.weather) {
-            commands.push({ type: 'setWeather', mode: plan.weather });
-            setVisibleWeather(plan.weather);
-          }
-          applyVisible(commands);
-        },
+        onPreset: applyPreset,
         onReset: () => {
+          activePreset = null;
           const restore = weatherMemory.takeRestore();
           const commands: Command[] = [{ type: 'resetScenario' }];
           if (restore) {
@@ -429,8 +590,23 @@ function start(root: HTMLElement): void {
     press = null;
     if (moved <= CLICK_MAX_MOVE_PX && quick) pickAt(e.clientX, e.clientY);
   });
+  // Keys from SHORTCUTS (J9): Esc leaves the tour, then closes a dialog, then clears the selection.
   window.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !(e.target instanceof HTMLInputElement)) store.clearSelection();
+    if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || typing(e.target)) return;
+    const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    if (!SHORTCUTS.some((s) => s.key === key)) return;
+    if (key === 'Escape') {
+      if (kiosk) exitKiosk();
+      else if (share.value.helpOpen) patchShare({ helpOpen: false });
+      else if (share.value.copyFallback !== null) patchShare({ copyFallback: null });
+      else store.clearSelection();
+    } else if (key === 'p') {
+      e.preventDefault();
+      captureRequested = true;
+    } else if (key === '?') {
+      e.preventDefault();
+      patchShare({ helpOpen: true });
+    }
   });
   window.addEventListener('resize', resize);
 
@@ -472,7 +648,7 @@ function start(root: HTMLElement): void {
       rects.push({ id, priority: a.priority, x, y, w, h, el });
     }
     // Labels never show through the dashboard panels.
-    const blockers = [...overlay.querySelectorAll<HTMLElement>('.dashboard .panel, .sheet-detail, .sheet-tracker, .sheet-table')]
+    const blockers = [...overlay.querySelectorAll<HTMLElement>('.dashboard .panel, .sheet-detail, .sheet-tracker, .sheet-table, .embed-hud, .kiosk-caption')]
       .map((el) => el.getBoundingClientRect())
       .filter((b) => b.width > 0 && b.height > 0)
       .map((b) => ({ x: b.left, y: b.top, w: b.width, h: b.height }));
@@ -552,6 +728,7 @@ function start(root: HTMLElement): void {
 
     // Camera glides are presentation only: run them on wall-clock time so they land on schedule even
     // when a frame stalls (shader compiles, slow GPUs); the simulation keeps its 0.25 s cap.
+    if (kiosk) kioskStep(Math.min(KIOSK_MAX_STEP_SEC, rawDt));
     rig.update(Math.min(1, rawDt));
     environment = environmentFor(weatherMode, curr.clockHours, dayNight, { reducedMotion, qualityTier });
     atmosphere.apply(environment, dt, rig.state().target);
@@ -583,6 +760,11 @@ function start(root: HTMLElement): void {
     effects = postEffectsFor({ nightFactor: environment.nightFactor, qualityTier, shimmer: environment.shimmer });
     post.render(effects, elapsed);
     drawCalls = renderer.info.render.calls;
+    // Same task as the render, so the drawing buffer still holds this frame (J7).
+    if (captureRequested) {
+      captureRequested = false;
+      takeScreenshot();
+    }
 
     panelClock += dt;
     tableClock += dt;
@@ -593,6 +775,8 @@ function start(root: HTMLElement): void {
       baselineMetrics = baseline.metrics();
       baselineQueues = queueSummary(baseline.snapshot());
       data.value = dashboardData();
+      if (mode === 'kiosk') patchShare({ kiosk: kioskView() });
+      else if (mode === 'embed') patchShare({ fullViewHref: fullViewHref() });
     }
     if (tableClock >= TABLE_REFRESH_SEC) {
       tableClock = 0;
@@ -601,6 +785,30 @@ function start(root: HTMLElement): void {
     ready = true;
     requestAnimationFrame(frame);
   };
+
+  // Deep link, in J2 order (seed, weather, time of day, theme and labels were applied above).
+  if (link.quality !== 'auto') {
+    pinnedTier = link.quality;
+    qualityTier = link.quality;
+    applyQuality(link.quality);
+  }
+  if (link.preset) applyPreset(link.preset);
+  if (link.area !== LINK_DEFAULTS.area) {
+    const a = areaById(link.area);
+    store.setArea(link.area);
+    rig.jump({ target: { x: a.x, z: a.z }, distance: a.distance, azimuth: a.azimuth ?? Math.PI / 4, polar: 0.85 });
+  }
+  const facilityLink = FACILITIES.find((f) => f.id === link.select);
+  if (facilityLink) flyToFacility(facilityLink.id);
+  else if (link.select) store.select({ kind: 'resource', id: link.select });
+  else if (link.cam) {
+    const c = link.cam;
+    rig.jump({ target: { x: c.x, z: c.z }, distance: c.distance, azimuth: c.azimuthDeg / DEG, polar: (90 - c.elevationDeg) / DEG });
+  }
+  setSpeed(toSpeed(link.speed));
+  if (mode === 'kiosk') enterKiosk();
+  else if (mode === 'embed') patchShare({ fullViewHref: fullViewHref() });
+
   requestAnimationFrame(frame);
 
   if (import.meta.env.VITE_TEST_HOOKS === '1') {
@@ -660,6 +868,15 @@ function start(root: HTMLElement): void {
       airportTime: () => airportTime,
       boomOpen: (id) => site.boomOpen(id),
       patrolPose: () => site.patrolPose(),
+      mode: () => mode,
+      link: currentLink,
+      kiosk: () => {
+        if (!kiosk) return null;
+        const k = kiosk.state();
+        return { phase: k.phase, area: k.area, resumeInSec: k.resumeInSec };
+      },
+      advanceKiosk: kioskStep,
+      help: () => share.value.helpOpen,
     };
     window.__hub = hooks;
   }

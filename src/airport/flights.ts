@@ -1,3 +1,4 @@
+import { dayCurve } from '../sim/demand';
 import { sampleKeyframes, type Keyframe } from './paths';
 import { airportPlan, GATE_IDS, type GateId } from './plan';
 
@@ -53,6 +54,20 @@ export const MAX_ROLL_SPEED = 85;
 /** Gates occupied at t = 0 (H4). */
 export const INITIAL_GATES: readonly GateId[] = ['A1', 'A2', 'A3', 'A4', 'A5', 'A6'];
 
+/** Hub clock hours at airport time t (K8): the hub opens at 08:00 and runs 15 hub seconds per airport second. */
+export function hubHoursAt(airportTime: number): number {
+  return (((8 + (15 * airportTime) / 3600) % 24) + 24) % 24;
+}
+
+/** Seconds between movements at a hub hour (R-5, K8): 40 / dayCurve, clamped to [MIN_INTERVAL, 120]. */
+export function movementInterval(hours: number): number {
+  return Math.min(MAX_INTERVAL, Math.max(MIN_INTERVAL, 40 / dayCurve(hours)));
+}
+
+/** Shortest time between movements (K8): 30 s, because at 25 s a pushback came within 43.8 m of an arrival. */
+export const MIN_INTERVAL = 30;
+export const MAX_INTERVAL = 120;
+
 export interface FlightSchedule {
   /** Every aircraft visible at airport time t: moving and parked. */
   aircraftAt(t: number): readonly AircraftPose[];
@@ -66,6 +81,8 @@ export interface FlightSchedule {
    * free gate, or at a remote stand when all are full. With every stand taken it diverts (not added).
    */
   scheduleExtra(t: number): number;
+  /** Airport seconds from t until the next touchdown (approach → landing), or null if none is scheduled (§21, SH-9). */
+  nextTouchdown(t: number): number | null;
 }
 
 // ---------- timing (seconds after the cycle start c) ----------
@@ -78,15 +95,18 @@ const TAXIWAY_SPEED = 16;
 const NORTH_SPEED = 10;
 const PUSHBACK_SPEED = 5;
 const CLAIM_AFTER_TOUCHDOWN = 18;
-const LINEUP_AT = 46;
-const ROLL_SEC = 24;
+/** A departure lines up this long after the cycle's half-way point (K8). */
+const LINEUP_AFTER_INTERVAL = 4;
+/** Take-off roll (K8: 20 s, so a 25 s interval keeps the runway exclusive). */
+const ROLL_SEC = 20;
+/** A surge extra gets its own arrival-only cycle of this length (K8). */
+const EXTRA_CYCLE = 80;
+/** A departure's gate is picked this long before its line-up (before the earliest possible pushback). */
+const PICK_BEFORE_LINEUP = 70;
 const ROLL_TOP_SPEED = 75;
 const CLIMB_SPEED = 80;
 const CLIMB_DEG = 8;
-const EXTRA_TOUCHDOWN = 21.5;
 const MAX_APPROACH_HEIGHT = 450;
-/** A departure picks its gate this long before the cycle (before the earliest possible pushback). */
-const DEPARTURE_PICK = -17;
 const CARGO_STAND = { x: -430, z: 345 } as const;
 
 const tanDeg = (d: number): number => Math.tan((d * Math.PI) / 180);
@@ -178,7 +198,7 @@ function arrivalTrack(touchdown: number, approachStart: number, stand: { x: numb
 }
 
 /** Pushback, north to the taxiway, east to line-up, roll west, climb out. */
-function departureTrack(cycle: number, stand: { x: number; z: number }): { track: Track; start: number; end: number } {
+function departureTrack(lineup: number, stand: { x: number; z: number }): { track: Track; start: number; end: number } {
   const plan = airportPlan();
   const tw = plan.taxiway.z;
   const lane = plan.apronLane.z;
@@ -186,7 +206,6 @@ function departureTrack(cycle: number, stand: { x: number; z: number }): { track
   const lineupX = plan.runway.toX - 10;
   const connector = hypot(plan.taxiway.toX, tw, lineupX, rz);
   const legs = (lane - stand.z) / PUSHBACK_SPEED + (tw - lane) / NORTH_SPEED + (plan.taxiway.toX - stand.x) / TAXIWAY_SPEED + connector / (TAXIWAY_SPEED - 1);
-  const lineup = cycle + LINEUP_AT;
   const start = lineup - legs;
   const b = new Builder(start, stand.x, 0, stand.z).phase('pushback').to(stand.x, 0, lane, PUSHBACK_SPEED);
   const pushEnd = b.time;
@@ -219,13 +238,15 @@ export function createFlightSchedule(): FlightSchedule {
   };
   const remotes = [plan.remoteStand, { x: plan.remoteStand.x - 50, z: plan.remoteStand.z }];
   const extras: number[] = [];
-  let built: { until: number; jets: Jet[]; holds: { gate: GateId; id: string; from: number; to: number }[] } | null = null;
+  let built: { until: number; jets: Jet[]; holds: { gate: GateId; id: string; from: number; to: number }[]; touchdowns: number[] } | null = null;
 
   /** Replays cycles up to `until` (deterministic; rebuilt when an extra is added). */
   function build(until: number): NonNullable<typeof built> {
     if (built && built.until >= until) return built;
     const jets: Jet[] = [];
     const holds: { gate: GateId; id: string; from: number; to: number }[] = [];
+    /** Touchdown times of the arrivals that land (an extra with no free stand diverts). */
+    const touchdowns: number[] = [];
     const holder = new Map<GateId, { id: string; since: number }>();
     const remoteUsed: boolean[] = remotes.map(() => false);
     INITIAL_GATES.forEach((g, i) => {
@@ -235,14 +256,18 @@ export function createFlightSchedule(): FlightSchedule {
       holder.set(g, { id, since: -100 + i });
     });
     jets.push({ id: 'SC-cargo', airline: 'sunlineCargo', arrive: null, from: -Infinity, stand: null, claimAt: -Infinity, depart: null, departAt: Infinity, goneAt: Infinity });
+    /** When each gate's last occupant pushes back: a gate is only free from then on. */
+    const freeFrom = new Map<GateId, number>();
     const release = (g: GateId, at: number): void => {
       const h = holder.get(g);
       if (!h) return;
       holds.push({ gate: g, id: h.id, from: h.since, to: at });
       holder.delete(g);
+      freeFrom.set(g, at);
     };
     const claim = (id: string, at: number): { gate: GateId | 'remote'; x: number; z: number } | null => {
-      const free = GATE_IDS.find((g) => !holder.has(g));
+      // Releases are recorded at their (future) pushback time, so check it has passed by `at`.
+      const free = GATE_IDS.find((g) => !holder.has(g) && (freeFrom.get(g) ?? -Infinity) <= at);
       if (free) {
         holder.set(free, { id, since: at });
         return { gate: free, ...standOf(free) };
@@ -253,15 +278,27 @@ export function createFlightSchedule(): FlightSchedule {
       const s = remotes[r] ?? plan.remoteStand;
       return { gate: 'remote', x: s.x, z: s.z };
     };
-    const last = Math.ceil(until / CYCLE_SEC) + 1;
-    for (let k = 0; k <= last; k++) {
-      const c = k * CYCLE_SEC;
+    // Cycles of two movement intervals at the hub hour (K8); a surge extra inserts an arrival-only
+    // cycle at the first boundary an approach after its start, so started flights never move.
+    const queue = extras.map((start, i) => ({ start, i })).sort((a, b) => a.start - b.start || a.i - b.i);
+    let c = 0;
+    let k = 0;
+    while (c <= until + 2 * MAX_INTERVAL) {
+      const extra = queue[0];
+      if (extra && extra.start + APPROACH_SEC <= c) {
+        queue.shift();
+        land({ id: `X${String(extra.i)}`, airline: AIRLINES[(extra.i + 1) % AIRLINES.length] ?? 'coastline', touchdown: c, approachStart: extra.start });
+        c += EXTRA_CYCLE;
+        continue;
+      }
+      const interval = movementInterval(hubHoursAt(c));
       if (k >= 1) {
-        // Departure: the gate held longest at the pick time.
+        // Departure: the gate held longest before its earliest possible pushback.
+        const lineup = c + interval + LINEUP_AFTER_INTERVAL;
         let pick: GateId | null = null;
         let since = Infinity;
         for (const [g, h] of holder) {
-          if (h.since <= c + DEPARTURE_PICK && h.since < since) {
+          if (h.since <= lineup - PICK_BEFORE_LINEUP && h.since < since) {
             since = h.since;
             pick = g;
           }
@@ -269,41 +306,29 @@ export function createFlightSchedule(): FlightSchedule {
         const h = pick ? holder.get(pick) : undefined;
         const jet = h ? jets.find((j) => j.id === h.id) : undefined;
         if (pick && jet) {
-          const d = departureTrack(c, standOf(pick));
+          const d = departureTrack(lineup, standOf(pick));
           jet.depart = d.track;
           jet.departAt = d.start;
           jet.goneAt = d.end;
           release(pick, d.start);
         }
       }
-      // Regular arrival.
-      const arrivals: { id: string; airline: Airline; touchdown: number; approachStart: number }[] = [
-        { id: `A${String(k)}`, airline: AIRLINES[k % AIRLINES.length] ?? 'pacificGateway', touchdown: c, approachStart: c - APPROACH_SEC },
-      ];
-      extras.forEach((start, i) => {
-        const touchdown = extraTouchdown(start, i);
-        if (touchdown >= c && touchdown < c + CYCLE_SEC) arrivals.push({ id: `X${String(i)}`, airline: AIRLINES[(i + 1) % AIRLINES.length] ?? 'coastline', touchdown, approachStart: start });
-      });
-      for (const a of arrivals) {
-        const claimAt = a.touchdown + CLAIM_AFTER_TOUCHDOWN;
-        const stand = claim(a.id, claimAt);
-        if (!stand) continue; // Every stand taken: the extra diverts.
-        const { track } = arrivalTrack(a.touchdown, a.approachStart, stand);
-        jets.push({ id: a.id, airline: a.airline, arrive: track, from: a.approachStart, stand, claimAt, depart: null, departAt: Infinity, goneAt: Infinity });
-      }
+      land({ id: `A${String(k)}`, airline: AIRLINES[k % AIRLINES.length] ?? 'pacificGateway', touchdown: c, approachStart: c - APPROACH_SEC });
+      c += 2 * interval;
+      k++;
     }
     for (const [g, h] of holder) holds.push({ gate: g, id: h.id, from: h.since, to: Infinity });
-    built = { until: last * CYCLE_SEC, jets, holds };
+    built = { until: c - 2 * MAX_INTERVAL, jets, holds, touchdowns };
     return built;
-  }
 
-  /** Touchdown of extra i: the first free extra slot (one per cycle) at least an approach after its start. */
-  function extraTouchdown(start: number, i: number): number {
-    const taken = new Set<number>();
-    for (let j = 0; j < i; j++) taken.add(Math.round(extraTouchdown(extras[j] ?? 0, j)));
-    let k = Math.max(0, Math.ceil((start + APPROACH_SEC - EXTRA_TOUCHDOWN) / CYCLE_SEC));
-    while (taken.has(Math.round(k * CYCLE_SEC + EXTRA_TOUCHDOWN))) k++;
-    return k * CYCLE_SEC + EXTRA_TOUCHDOWN;
+    function land(a: { id: string; airline: Airline; touchdown: number; approachStart: number }): void {
+      const claimAt = a.touchdown + CLAIM_AFTER_TOUCHDOWN;
+      const stand = claim(a.id, claimAt);
+      if (!stand) return; // Every stand taken: the extra diverts.
+      const { track } = arrivalTrack(a.touchdown, a.approachStart, stand);
+      touchdowns.push(a.touchdown);
+      jets.push({ id: a.id, airline: a.airline, arrive: track, from: a.approachStart, stand, claimAt, depart: null, departAt: Infinity, goneAt: Infinity });
+    }
   }
 
   function pose(jet: Jet, t: number): AircraftPose | null {
@@ -361,6 +386,13 @@ export function createFlightSchedule(): FlightSchedule {
       extras.push(t);
       built = null;
       return t;
+    },
+    nextTouchdown(t) {
+      // Built at least two cycles past t, so the next landing (or an extra's) is always included.
+      const { touchdowns } = build(t + EXTRA_CYCLE);
+      let next = Infinity;
+      for (const td of touchdowns) if (td > t && td < next) next = td;
+      return Number.isFinite(next) ? next - t : null;
     },
   };
 }

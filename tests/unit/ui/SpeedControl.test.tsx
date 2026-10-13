@@ -10,14 +10,14 @@ describe('SpeedControl (S-18)', () => {
     render(<SpeedControl speed={1} onSpeed={vi.fn()} />);
     const group = screen.getByRole('group', { name: 'Simulation speed' });
     const buttons = within(group).getAllByRole('button');
-    expect(buttons.map((b) => b.textContent)).toEqual(['Pause', '20×', '40×', '60×']);
+    expect(buttons.map((b) => b.textContent)).toEqual(['Pause', '15×', '30×', '45×']);
     expect(buttons.map((b) => b.getAttribute('aria-pressed'))).toEqual(['false', 'true', 'false', 'false']);
   });
 
   it('reports the picked speed', () => {
     const onSpeed = vi.fn();
     render(<SpeedControl speed={1} onSpeed={onSpeed} />);
-    fireEvent.click(screen.getByRole('button', { name: '60×' }));
+    fireEvent.click(screen.getByRole('button', { name: '45×' }));
     expect(onSpeed).toHaveBeenLastCalledWith(3);
     fireEvent.click(screen.getByRole('button', { name: 'Pause' }));
     expect(onSpeed).toHaveBeenLastCalledWith(0);

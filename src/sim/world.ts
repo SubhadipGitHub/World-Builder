@@ -5,8 +5,8 @@ import { DEPARTURE_BACKLOG_PER_GATE, OUTAGE_KINDS, surge } from '../config/scena
 import { weather as weatherTable, type WeatherMode } from '../config/weather';
 import { hub, hubGraph, type StationId, type UnitLayout } from '../layout/hub';
 import { createDataGen } from './datagen';
-import { createRentPool, pickupArrivals, rentalDuration } from './demand';
-import { chargeSoc, refuel, secondsToSoc } from './energy';
+import { createRentPool, dayCurve, periodOf, pickupArrivals, rentalDuration, warpReturn } from './demand';
+import { chargeSoc, refuel, secondsToSoc, shouldChargeLater } from './energy';
 import type { SimEvent } from './events';
 import type { Footprint } from './invariants';
 import { isParkedState, milestoneFor, TRACKER_STAGES, type TrackerStage, type VehicleState } from './lifecycle';
@@ -95,6 +95,8 @@ export interface Snapshot {
   readonly scenario: ScenarioView;
   /** Customers waiting at the counter for a car (I-3); read-only. */
   readonly counterQueue: number;
+  /** Demand the hub is experiencing (R-7, K7): day curve × weather × surge, and the curve's period. */
+  readonly demand: { readonly factor: number; readonly period: string };
 }
 
 export interface Metrics {
@@ -131,14 +133,23 @@ export interface Sim {
 // ---------- internal model ----------
 
 /** Wall-clock steps run before t = 0 so the hub starts mid-operation (3-second "alive" story). */
-const PREROLL_STEPS = 1_800;
+/** Warm start in simulated seconds (30 min), independent of the clock rate (M7, D30). */
+const PREROLL_SIM_SEC = 1_800;
 const START_HOUR = 8;
 const AGREEMENT_YEAR = 2026;
 const TURNAROUND_WINDOW_SEC = 2 * 3600;
 const QUEUE_OVERFLOW = 6;
 const SLOT_FALLBACK_SEC = 120;
 const INITIAL_STAGED: Readonly<Record<VehicleClass, number>> = { sedan: 8, suv: 6, ev: 8 };
-const GATE_DWELL = { min: 10, max: 20 } as const;
+/** Checkout dwell at the exit gate (R-2; 10–20 s before M7). */
+const GATE_DWELL = { min: 8, max: 15 } as const;
+/** D36: a stopped car (≤ this speed, m/s) within NOSE_TO_TAIL_GAP metres of a queued car ahead counts as queued. */
+const QUEUE_CREEP_SPEED = 0.1;
+const NOSE_TO_TAIL_GAP = 4;
+/** Stations whose lanes take a second car behind the occupant (roll-up staging, K3). */
+// Short, predictable service only: a car staged behind a charger or pump could wait 20+ minutes while
+// another unit frees up (found by the day-long soak), so those keep the plain FIFO queue.
+const STAGED: ReadonlySet<string> = new Set(['returnLane', 'wash', 'gate']);
 const SHUTTLE_DWELL = { min: 120, max: 240 } as const;
 /** Distance over which a towed car slides from its parked pose onto the tow truck's track. */
 const TOW_BLEND_M = 10;
@@ -252,7 +263,8 @@ export function createSim(config: SimConfig): Sim {
   let weatherMode: WeatherMode = config.weather ?? 'clear';
   let timeScale = config.timeScale ?? defaultRates.timeScale;
   let tick = 0;
-  let now = -PREROLL_STEPS * defaultRates.stepWallSec * timeScale;
+  const prerollSteps = Math.round(PREROLL_SIM_SEC / (defaultRates.stepWallSec * timeScale));
+  let now = -prerollSteps * defaultRates.stepWallSec * timeScale;
   let events: SimEvent[] = [];
   const turnarounds: TurnaroundRecord[] = [];
 
@@ -263,7 +275,7 @@ export function createSim(config: SimConfig): Sim {
   const unitById = new Map<string, { station: Station; unit: UnitLayout }>();
   for (const id of stationIds) {
     const units = hub.stations[id].units;
-    pools.set(id, createResourcePool(units.map((u) => (u.tag ? { id: u.id, tag: u.tag } : { id: u.id }))));
+    pools.set(id, createResourcePool(units.map((u) => (u.tag ? { id: u.id, tag: u.tag } : { id: u.id })), { staging: STAGED.has(id) }));
     for (const u of units) unitById.set(u.id, { station: id, unit: u });
   }
   const pool = (s: Station): ResourcePool => pools.get(s) as ResourcePool;
@@ -272,6 +284,22 @@ export function createSim(config: SimConfig): Sim {
   const chargerKw = new Map<string, number>(hub.stations.charger.units.map((u) => [u.id, gen.chargeRateKw()]));
   const overflowing = new Set<Station>();
   const pending: PendingRelease[] = [];
+  /** Every non-slot unit's lane: routes that merely pass by must avoid them (charge-later, R-8). */
+  const unitLanes: ReadonlySet<string> = new Set(
+    stationIds.filter((id) => id !== 'slot').flatMap((id) => hub.stations[id].units.map((u) => u.parkEdge)),
+  );
+
+  // ---------- demand (M7: day curve R-3, returns R-4, K5–K7) ----------
+
+  /** Hub clock hours in [0, 24). */
+  const clockHours = (): number => ((((START_HOUR * 3600 + now) / 3600) % 24) + 24) % 24;
+  /** Pickup demand right now: day curve × weather × surge. */
+  const demandFactor = (): number => dayCurve(clockHours()) * weatherTable[weatherMode].demandFactor * pickupFactor(scenario, now);
+  /**
+   * Seconds until a rental returns, shaped by the day curve (K6). Cars already out at the start are
+   * part-way through their rental, so they have no minimum (as before M7).
+   */
+  const returnAfter = (durationSec: number, minSec: number = defaultRates.minRentalSimSec): number => warpReturn(START_HOUR * 3600 + now, durationSec, minSec);
 
   // ---------- what-if scenario (§9, architecture §17) ----------
 
@@ -338,6 +366,27 @@ export function createSim(config: SimConfig): Sim {
 
   const energyStation = (v: Vehicle): Station => (v.cls === 'ev' ? 'charger' : 'pump');
 
+  /**
+   * After wash or service: charge or refuel, unless the queue is long and the car is at least half
+   * full (charge-later policy, R-8): then it goes straight to the Ready lot, with no 'energised' step.
+   */
+  function toEnergy(v: Vehicle): void {
+    const station = energyStation(v);
+    transition(v, 'energyQueue');
+    const level = (v.cls === 'ev' ? v.socPct : v.fuelPct) ?? 0;
+    if (shouldChargeLater(level, waitingAt(station))) {
+      // Never through a charger, pump or bay lane (a shortcut there blocks behind the occupant).
+      const bypass = graph.route(currentEdge(v.id), queueEdge('slot'), 'fleet', unitLanes);
+      if (bypass) {
+        transition(v, 'toLot');
+        engine.setRoute(v.id, bypass);
+        v.phase = { kind: 'toQueue', station: 'slot' };
+        return;
+      }
+    }
+    goToQueue(v, station);
+  }
+
   function goToQueue(v: Vehicle, station: Station): void {
     routeTo(v, queueEdge(station));
     v.phase = { kind: 'toQueue', station };
@@ -401,7 +450,7 @@ export function createSim(config: SimConfig): Sim {
         slots.release(grant.unitId);
       }
     }
-    rent.add(v.id, now, rng.exponential(r.meanRentalSimSec) / weatherTable[weatherMode].demandFactor);
+    rent.add(v.id, now, returnAfter(rng.exponential(r.meanRentalSimSec) / weatherTable[weatherMode].demandFactor, 0));
   }
 
   // Shuttles, carts, van and the tow truck.
@@ -476,7 +525,7 @@ export function createSim(config: SimConfig): Sim {
   }
 
   function serveCustomers(dtSim: number): void {
-    const arrivals = pickupArrivals(rng, r.pickupsPerSimHour, dtSim, weatherTable[weatherMode].demandFactor * pickupFactor(scenario, now));
+    const arrivals = pickupArrivals(rng, r.pickupsPerSimHour, dtSim, demandFactor());
     for (let i = 0; i < arrivals; i++) {
       const roll = rng.next();
       const cls: VehicleClass = roll < facility.fleetMix.ev ? 'ev' : roll < facility.fleetMix.ev + facility.fleetMix.suv ? 'suv' : 'sedan';
@@ -578,16 +627,14 @@ export function createSim(config: SimConfig): Sim {
           transition(v, 'serviceQueue');
           goToQueue(v, 'service');
         } else {
-          transition(v, 'energyQueue');
-          goToQueue(v, energyStation(v));
+          toEnergy(v);
         }
         return;
       case 'service':
         if (phase.detailing) {
           v.washed = true;
-          transition(v, 'energyQueue');
           leaveUnit(v, station, unitId);
-          goToQueue(v, energyStation(v));
+          toEnergy(v);
           return;
         }
         v.serviced = true;
@@ -598,9 +645,8 @@ export function createSim(config: SimConfig): Sim {
           v.phase = { kind: 'working', station, unitId, start: now, until: now + uniform(defaultRates.washSimSec) * durationFactor(scenario, 'service'), detailing: true };
           return;
         }
-        transition(v, 'energyQueue');
         leaveUnit(v, station, unitId);
-        goToQueue(v, energyStation(v));
+        toEnergy(v);
         return;
       case 'charger':
       case 'pump':
@@ -676,7 +722,7 @@ export function createSim(config: SimConfig): Sim {
           v.phase = { kind: 'offMap' };
           // Heatwave: returns come back sooner as well as pickups rising (X-1).
           const factor = weatherTable[weatherMode].demandFactor;
-          rent.add(v.id, now, rentalDuration(rng, r.meanRentalSimSec, defaultRates.minRentalSimSec) / factor);
+          rent.add(v.id, now, returnAfter(rentalDuration(rng, r.meanRentalSimSec, defaultRates.minRentalSimSec) / factor));
         }
         return;
     }
@@ -708,7 +754,12 @@ export function createSim(config: SimConfig): Sim {
   function processReleases(): void {
     for (let i = pending.length - 1; i >= 0; i--) {
       const p = pending[i] as PendingRelease;
-      if (!engine.occupies(p.vehicleId, p.edge)) {
+      // K2: at drive-through units (return lanes, wash, gates) free the unit as soon as the leaving car's
+      // front is off its lane; the traffic engine keeps the next car behind it (L-4). Stalls, bays and the
+      // tow hand-off keep the whole-body rule: the day-long soak found jams when the next car entered
+      // while the previous one was still manoeuvring out.
+      const cleared = STAGED.has(p.station) ? view(p.vehicleId)?.edgeId !== p.edge : !engine.occupies(p.vehicleId, p.edge);
+      if (cleared) {
         pool(p.station).release(p.unitId);
         pending.splice(i, 1);
       }
@@ -906,7 +957,7 @@ export function createSim(config: SimConfig): Sim {
       case 'awaitGrant':
         return { task: `Waiting for ${p.station}`, eta: null };
       case 'toUnit':
-        return { task: `Driving to ${p.unitId}`, eta: null };
+        return { task: pool(p.station).nextOf(p.unitId) === v.id ? `Waiting behind ${p.unitId}` : `Driving to ${p.unitId}`, eta: null };
       case 'working': {
         if (p.station === 'charger') {
           const kw = (chargerKw.get(p.unitId) ?? energy.chargerKw.min) * weatherTable[weatherMode].chargeFactor;
@@ -929,6 +980,50 @@ export function createSim(config: SimConfig): Sim {
     }
   }
 
+  /** Waiting by its state or phase (queued, parked, at work); the base of AgentView.parked. */
+  function waitingByState(v: Vehicle): boolean {
+    return (
+      isParkedState(v.state) ||
+      QUEUE_STATES.has(v.state) ||
+      v.phase.kind === 'awaitGrant' ||
+      v.phase.kind === 'toQueue' ||
+      v.phase.kind === 'working' ||
+      v.phase.kind === 'staged'
+    );
+  }
+
+  /**
+   * D36: a car stopped on its way to a granted unit is waiting, not gridlocked, when the hold-up is a
+   * car that is itself queued: either nose-to-tail ahead of it (a wash queue backing up through the
+   * return lanes), or the unit's previous occupant still part-way out of the unit (K2 early release)
+   * because its own next queue is full. A real deadlock still shows at the head of the line.
+   */
+  function unitHeldByQueuedCar(v: Vehicle, unitId: string): boolean {
+    const edge = unitOf(unitId).parkEdge;
+    for (const other of vehicles.values()) {
+      if (other.id !== v.id && other.phase.kind !== 'towed' && waitingByState(other) && engine.occupies(other.id, edge)) return true;
+    }
+    return false;
+  }
+
+  function behindQueuedCar(id: string): boolean {
+    const me = view(id);
+    if (!me) return false;
+    const hx = Math.cos(me.heading);
+    const hz = Math.sin(me.heading);
+    for (const other of vehicles.values()) {
+      if (other.id === id || other.phase.kind === 'towed' || !waitingByState(other)) continue;
+      const o = view(other.id);
+      if (!o) continue;
+      const dx = o.x - me.x;
+      const dz = o.z - me.z;
+      const ahead = dx * hx + dz * hz;
+      const gap = ahead - (me.length + o.length) / 2;
+      if (ahead > 0 && gap <= NOSE_TO_TAIL_GAP && Math.abs(dx * hz - dz * hx) <= me.width) return true;
+    }
+    return false;
+  }
+
   function fleetView(v: Vehicle): AgentView | null {
     let pose: { x: number; z: number; heading: number };
     let speed: number;
@@ -944,13 +1039,7 @@ export function createSim(config: SimConfig): Sim {
       speed = mv.speed;
     }
     const { task, eta } = vehicleTask(v);
-    const parked =
-      isParkedState(v.state) ||
-      QUEUE_STATES.has(v.state) ||
-      v.phase.kind === 'awaitGrant' ||
-      v.phase.kind === 'toQueue' ||
-      v.phase.kind === 'working' ||
-      v.phase.kind === 'staged';
+    const parked = waitingByState(v);
     return {
       id: v.id,
       kind: 'fleet',
@@ -961,7 +1050,12 @@ export function createSim(config: SimConfig): Sim {
       width: dimensions[v.cls].width,
       // A granted car should be moving, except one bound for the tow bay: its path runs
       // through the wash queue road, so it waits like the queued cars around it.
-      parked: v.state === 'awaitingTow' || (parked && v.phase.kind !== 'toUnit' && v.phase.kind !== 'exiting'),
+      // A car staged behind an occupied unit (K3) is waiting by design, not gridlocked.
+      parked:
+        v.state === 'awaitingTow' ||
+        (v.phase.kind === 'toUnit' && pool(v.phase.station).nextOf(v.phase.unitId) === v.id) ||
+        (v.phase.kind === 'toUnit' && speed <= QUEUE_CREEP_SPEED && (unitHeldByQueuedCar(v, v.phase.unitId) || behindQueuedCar(v.id))) ||
+        (parked && v.phase.kind !== 'toUnit' && v.phase.kind !== 'exiting'),
       state: v.state,
       stage: v.stage,
       plate: v.plate,
@@ -1050,7 +1144,7 @@ export function createSim(config: SimConfig): Sim {
 
   // ---------- warm start ----------
 
-  for (let i = 0; i < PREROLL_STEPS; i++) step();
+  for (let i = 0; i < prerollSteps; i++) step();
   now = 0;
   tick = 0;
   events = [];
@@ -1058,8 +1152,8 @@ export function createSim(config: SimConfig): Sim {
   return {
     step,
     snapshot() {
-      const hours = (((START_HOUR * 3600 + now) / 3600) % 24 + 24) % 24;
-      return { tick, simTimeSec: now, clockHours: hours, weather: weatherMode, timeScale, agents: agents(), resources: resources(), scenario: scenarioView(scenario, now), counterQueue: customers.length };
+      const hours = clockHours();
+      return { tick, simTimeSec: now, clockHours: hours, weather: weatherMode, timeScale, agents: agents(), resources: resources(), scenario: scenarioView(scenario, now), counterQueue: customers.length, demand: { factor: demandFactor(), period: periodOf(hours) } };
     },
     metrics() {
       const fleetOnMap = [...vehicles.values()].filter((v) => v.phase.kind !== 'offMap');

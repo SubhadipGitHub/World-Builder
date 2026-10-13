@@ -41,6 +41,7 @@ const snapshot = (agents: AgentView[], resources: ResourceView[] = []): Snapshot
   resources,
   scenario: idleScenario(),
   counterQueue: 0,
+  demand: { factor: 1, period: 'Midday' },
 });
 
 const tracker = (perHour = 0, lastOccupant: string | null = null, lastCompletion: number | null = null): ThroughputTracker => ({

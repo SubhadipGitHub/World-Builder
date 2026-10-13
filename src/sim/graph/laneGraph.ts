@@ -68,10 +68,11 @@ export interface LaneGraph {
   edge(id: string): Edge;
   outgoing(nodeId: string): readonly Edge[];
   /**
-   * Shortest route by length, inclusive of both edges; null if unreachable.
+   * Shortest route by length, inclusive of both edges; null if unreachable. `avoid`: edges the route
+   * must not use (the start and target excepted).
    * With a kind, edges that exclude that kind are skipped; without one, kind limits are ignored.
    */
-  route(fromEdgeId: string, toEdgeId: string, kind?: AgentKind): readonly string[] | null;
+  route(fromEdgeId: string, toEdgeId: string, kind?: AgentKind, avoid?: ReadonlySet<string>): readonly string[] | null;
   /** Zones touching an edge, ordered by sEnter. */
   zonesOn(edgeId: string): readonly { readonly zone: ConflictZone; readonly interval: ZoneInterval }[];
 }
@@ -281,8 +282,8 @@ export function buildLaneGraph(spec: LaneGraphSpec): LaneGraph {
   const routeCache = new Map<string, readonly string[] | null>();
   const allows = (e: Edge, kind: AgentKind | undefined): boolean => kind === undefined || e.kinds === null || e.kinds.includes(kind);
 
-  const route = (fromEdgeId: string, toEdgeId: string, kind?: AgentKind): readonly string[] | null => {
-    const key = `${fromEdgeId}|${toEdgeId}|${kind ?? '*'}`;
+  const route = (fromEdgeId: string, toEdgeId: string, kind?: AgentKind, avoid?: ReadonlySet<string>): readonly string[] | null => {
+    const key = `${fromEdgeId}|${toEdgeId}|${kind ?? '*'}|${avoid ? [...avoid].sort().join(',') : ''}`;
     const cached = routeCache.get(key);
     if (cached !== undefined) return cached;
     getEdge(fromEdgeId);
@@ -315,7 +316,7 @@ export function buildLaneGraph(spec: LaneGraphSpec): LaneGraph {
       }
       done.add(current);
       for (const next of outgoingMap.get(getEdge(current).to) ?? []) {
-        if (!allows(next, kind) || done.has(next.id)) continue;
+        if (!allows(next, kind) || done.has(next.id) || (avoid?.has(next.id) === true && next.id !== toEdgeId)) continue;
         const nd = best + next.length;
         const old = dist.get(next.id);
         if (old === undefined || nd < old) {

@@ -21,9 +21,10 @@ export const surge = {
 /**
  * Departure back-pressure (W11): customers wait at the counter instead of walking to their car once
  * this many departures (cars heading to the gates plus customers walking to them) are pending per
- * online gate. Keeps a gate backlog out of the lot aisles and the walkway.
+ * online gate. Keeps a gate backlog out of the lot aisles and the walkway. 9 since M7 (was 10): the
+ * day-long soak found gate queues of 11–13 and a jam at 10, and 88% served in rain at 8.
  */
-export const DEPARTURE_BACKLOG_PER_GATE = 10;
+export const DEPARTURE_BACKLOG_PER_GATE = 9;
 
 /** S-3: job-duration multipliers per crew level. */
 export const crewFactor: Readonly<Record<CrewLevel, number>> = { short: 1.5, normal: 1, extra: 0.7 };

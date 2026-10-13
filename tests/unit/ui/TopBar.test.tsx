@@ -36,7 +36,12 @@ function setup(overrides: Partial<TopBarProps> = {}) {
     chips: [],
     onOpenWhatIf: vi.fn(),
     labelsOn: true,
+    demand: { factor: 1.6, period: 'Morning peak' },
     onLabels: vi.fn(),
+    onCopyLink: vi.fn(),
+    onStartTour: vi.fn(),
+    onScreenshot: vi.fn(),
+    onOpenHelp: vi.fn(),
     ...overrides,
   };
   render(<TopBar {...props} />);
@@ -124,7 +129,7 @@ describe('TopBar what-if additions (S-6, S-7, S-18)', () => {
     const props = setup({ speed: 0 });
     const group = screen.getByRole('group', { name: 'Simulation speed' });
     expect(within(group).getByRole('button', { name: 'Pause' }).getAttribute('aria-pressed')).toBe('true');
-    fireEvent.click(within(group).getByRole('button', { name: '40×' }));
+    fireEvent.click(within(group).getByRole('button', { name: '30×' }));
     expect(props.onSpeed).toHaveBeenLastCalledWith(2);
   });
 });
@@ -137,5 +142,41 @@ describe('TopBar building labels switch (I-4)', () => {
     expect(sw.getAttribute('aria-checked')).toBe('true');
     fireEvent.click(sw);
     expect(props.onLabels).toHaveBeenLastCalledWith(false);
+  });
+});
+
+describe('TopBar demand readout (R-7)', () => {
+  it('shows the demand next to the clock', () => {
+    setup({ demand: { factor: 1.6, period: 'Morning peak' } });
+    expect(screen.getByLabelText('Demand').textContent).toBe('Demand ×1.6 · Morning peak');
+  });
+
+  it('shows nothing without a snapshot', () => {
+    setup({ demand: null });
+    expect(screen.queryByLabelText('Demand')).toBeNull();
+  });
+});
+
+describe('TopBar M8 actions (SH-7, SH-9, SH-11, SH-12)', () => {
+  it('has a "Save screenshot" button', () => {
+    const props = setup();
+    fireEvent.click(screen.getByRole('button', { name: 'Save screenshot' }));
+    expect(props.onScreenshot).toHaveBeenCalledTimes(1);
+  });
+
+  it('has a "Help" button that opens help', () => {
+    const props = setup();
+    fireEvent.click(screen.getByRole('button', { name: 'Help' }));
+    expect(props.onOpenHelp).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers "Copy link" and "Start tour" in the user menu', () => {
+    const props = setup();
+    fireEvent.click(screen.getByRole('button', { name: 'User menu' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Copy link' }));
+    expect(props.onCopyLink).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'User menu' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Start tour' }));
+    expect(props.onStartTour).toHaveBeenCalledTimes(1);
   });
 });

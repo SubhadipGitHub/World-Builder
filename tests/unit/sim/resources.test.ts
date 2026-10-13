@@ -136,3 +136,63 @@ describe('ResourcePool outages (S-2, W3)', () => {
     }).toThrow();
   });
 });
+
+describe('ResourcePool roll-up staging (K3)', () => {
+  it('grants the first waiter as next while a unit is occupied, and promotes it on release', () => {
+    const pool = createResourcePool(bays(1), { staging: true });
+    pool.enqueue('a');
+    pool.enqueue('b');
+    pool.enqueue('c');
+    expect(pool.allocate()).toEqual([
+      { agentId: 'a', unitId: 'bay1' },
+      { agentId: 'b', unitId: 'bay1', next: true },
+    ]);
+    expect(pool.nextOf('bay1')).toBe('b');
+    expect(pool.waiting()).toEqual(['c']);
+    expect(pool.unitOf('b')).toBe('bay1');
+    pool.release('bay1');
+    expect(pool.occupant('bay1')).toBe('b');
+    expect(pool.nextOf('bay1')).toBeNull();
+    expect(pool.allocate()).toEqual([{ agentId: 'c', unitId: 'bay1', next: true }]);
+  });
+
+  it('prefers a free unit over staging, and respects tags', () => {
+    const pool = createResourcePool([{ id: 'ev-01', tag: 'ev' }, { id: 'suv-01', tag: 'suv' }], { staging: true });
+    pool.enqueue('e1', 'ev');
+    pool.enqueue('e2', 'ev');
+    pool.enqueue('s1', 'suv');
+    expect(pool.allocate()).toEqual([
+      { agentId: 'e1', unitId: 'ev-01' },
+      { agentId: 'e2', unitId: 'ev-01', next: true },
+      { agentId: 's1', unitId: 'suv-01' },
+    ]);
+  });
+
+  it('never stages onto an offline unit, and never stages without the option', () => {
+    const plain = createResourcePool(bays(1));
+    plain.enqueue('a');
+    plain.enqueue('b');
+    expect(plain.allocate()).toEqual([{ agentId: 'a', unitId: 'bay1' }]);
+    expect(plain.nextOf('bay1')).toBeNull();
+    const pool = createResourcePool(bays(2), { staging: true });
+    pool.enqueue('a');
+    pool.allocate();
+    pool.setOnline('bay1', false);
+    pool.enqueue('b');
+    pool.enqueue('c');
+    expect(pool.allocate()).toEqual([
+      { agentId: 'b', unitId: 'bay2' },
+      { agentId: 'c', unitId: 'bay2', next: true },
+    ]);
+  });
+
+  it('frees a staged agent that cancels', () => {
+    const pool = createResourcePool(bays(1), { staging: true });
+    pool.enqueue('a');
+    pool.enqueue('b');
+    pool.allocate();
+    pool.cancel('b');
+    expect(pool.nextOf('bay1')).toBeNull();
+    expect(pool.unitOf('b')).toBeNull();
+  });
+});

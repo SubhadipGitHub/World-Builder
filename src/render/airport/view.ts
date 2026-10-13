@@ -42,6 +42,8 @@ export interface AirportView {
   aircraft(): readonly AircraftPose[];
   /** Schedules the surge's extra arrival (F-2) at the current airport time. */
   surge(): void;
+  /** Airport seconds until the next touchdown, from the last update (M8 kiosk fact). */
+  nextLandingSec(): number | null;
 }
 
 const UP = new Vector3(0, 1, 0);
@@ -384,6 +386,7 @@ export function createAirportView(palette: Palette, atlas: TextAtlas | null): Ai
     surge() {
       schedule.scheduleExtra(now);
     },
+    nextLandingSec: () => schedule.nextTouchdown(now),
     update(frame) {
       now = frame.time;
       const detail = airportDetail(frame.tier, frame.reducedMotion);

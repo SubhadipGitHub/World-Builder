@@ -64,6 +64,14 @@ describe('buildLaneGraph: routing', () => {
     expect(g.route('e2', 'e1')).toBeNull();
   });
 
+  it('avoids the given edges when asked (M7: charge-later cars stay out of unit lanes)', () => {
+    const g = buildLaneGraph(spec);
+    expect(g.route('e3', 'e2', undefined, new Set(['e5']))).toBeNull();
+    expect(g.route('e1', 'e4', undefined, new Set(['e2']))).toEqual(['e1', 'e3', 'e4']);
+    // A route without avoidance is unaffected (and cached separately).
+    expect(g.route('e3', 'e2')).toEqual(['e3', 'e5', 'e2']);
+  });
+
   it('respects kind restrictions', () => {
     const g = buildLaneGraph(spec);
     expect(g.route('e3', 'e2', 'cart')).toEqual(['e3', 'e5', 'e2']);

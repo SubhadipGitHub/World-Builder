@@ -77,9 +77,11 @@ test('the entry boom lifts for arriving cars and the patrol car drives the perim
   await expect.poll(async () => page.evaluate(() => window.__hub!.boomOpen('entry')), { timeout: 30_000 }).toBeGreaterThan(0.5);
   const a = await page.evaluate(() => window.__hub!.patrolPose());
   expect(a).not.toBeNull();
-  await page.waitForTimeout(1_500);
-  const b = await page.evaluate(() => window.__hub!.patrolPose());
-  expect(Math.hypot(b!.x - a!.x, b!.z - a!.z)).toBeGreaterThan(1);
+  // Poll rather than sample after a fixed wait: under software WebGL a surge at the M7 morning peak
+  // can stretch a frame past 1.5 s, and the patrol pose only advances when a frame renders.
+  await expect
+    .poll(async () => page.evaluate(() => window.__hub!.patrolPose()).then((b) => Math.hypot(b!.x - a!.x, b!.z - a!.z)), { timeout: 10_000 })
+    .toBeGreaterThan(1);
 });
 
 test('stays within the draw-call budgets with all M5 detail (§10.5)', async ({ page }) => {
@@ -95,8 +97,8 @@ test('stays within the draw-call budgets with all M5 detail (§10.5)', async ({ 
   await page.evaluate(() => {
     window.__hub!.setQualityTier(2);
   });
-  await page.waitForTimeout(800);
+  // Wait for a frame at tier 2 rather than a fixed time: software WebGL frames can exceed 800 ms.
+  await expect.poll(async () => page.evaluate(() => window.__hub!.patrolPose()), { timeout: 10_000 }).toBeNull();
   expect(await page.evaluate(() => window.__hub!.drawCalls())).toBeLessThanOrEqual(150);
-  expect(await page.evaluate(() => window.__hub!.patrolPose())).toBeNull();
   expect(errors).toEqual([]);
 });

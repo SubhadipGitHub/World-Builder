@@ -1,13 +1,13 @@
 import type { JSX } from 'preact';
 
-/** Simulation speed (S-18, W9): 0 = paused, then 1, 2 or 3 simulation steps per tick (20×, 40×, 60× hub clock). */
+/** Simulation speed (S-18, W9): 0 = paused, then 1, 2 or 3 simulation steps per tick (15×, 30×, 45× hub clock; D30). */
 export type Speed = 0 | 1 | 2 | 3;
 
 export const SPEEDS: readonly { readonly value: Speed; readonly label: string }[] = [
   { value: 0, label: 'Pause' },
-  { value: 1, label: '20×' },
-  { value: 2, label: '40×' },
-  { value: 3, label: '60×' },
+  { value: 1, label: '15×' },
+  { value: 2, label: '30×' },
+  { value: 3, label: '45×' },
 ];
 
 export interface SpeedControlProps {

@@ -54,6 +54,7 @@ export const snapshot = (agents: AgentView[] = [], resources: ResourceView[] = [
   resources,
   scenario: idleScenario(),
   counterQueue: 0,
+  demand: { factor: 1, period: 'Midday' },
   ...overrides,
 });
 

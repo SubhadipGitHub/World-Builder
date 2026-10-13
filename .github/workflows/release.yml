@@ -1,0 +1,41 @@
+# Creates a GitHub Release with the single-file world attached (requirements SH-2, architecture §21 J11).
+# Runs on a pushed version tag; the tag must match package.json's version.
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Check the tag matches package.json
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if [ "$GITHUB_REF_NAME" != "v$VERSION" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json version $VERSION" >&2
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run check
+      - run: npm run test:e2e
+      - run: npm run build
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp dist/index.html "goldlane-hub-${VERSION}.html"
+          node scripts/changelog-section.mjs "$VERSION" > release-notes.md
+          gh release create "$GITHUB_REF_NAME" "goldlane-hub-${VERSION}.html" --title "GoldLane Hub $GITHUB_REF_NAME" --notes-file release-notes.md

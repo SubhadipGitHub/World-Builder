@@ -30,6 +30,8 @@
 | D20 | M6 flights (2026-10-12) | **Visual only**, on a deterministic schedule; the simulation is unchanged. |
 | D21 | M5/M6 performance (2026-10-12) | **Detail scales by quality tier.** The ≤ 300 / ≤ 150 draw-call budgets stay. |
 | D22–D25 | M6 airport (2026-10-12) | Mid-size airport, a movement about every 40 s, name labels, three fictional airlines (§11.1). |
+| D26–D39 | M7 ops realism (2026-10-13) | Faster gate cycle, an airport day demand curve, flights following the curve, Balanced targets, then the Stage 4 calibration decisions (§12.1). |
+| D40–D47 | M8 ship & share (2026-10-13) | GitHub Pages, Releases and an embed mode; full deep links; kiosk tour; screenshots; README, help overlay and changelog (§13.1). |
 
 > Note on D2: the pack loads Three.js "from a CDN". We bundle it inline instead. The result is still one HTML file and it works offline.
 
@@ -90,7 +92,7 @@ The layout is stylised and fictional. It is inspired by a typical US airport ren
 - **L-3** Secondary actors: 2 shuttle buses loop between the terminal kerb and an off-map airport exit. 3 technicians on golf carts drive to service bays and flagged cars. Up to about 30 pedestrians walk between the terminal and the Ready lot.
 - **L-4 No overlap, ever.** Vehicles, golf carts and shuttles move on a lane graph. They give way at junctions and merges, queue behind each other with a safe gap, and wait for a free bay or slot before entering. Vehicles stop for pedestrians at marked crossings. This is the hardest requirement and has the most tests.
 - **L-5** The simulation is deterministic for a given seed and fixed timestep, so tests can replay it. Rendering interpolates between steps.
-- **L-6 Time scale.** A simulated clock runs at **20× real time** and is adjustable. Process durations (inspection, wash, charging, rental) use realistic simulated minutes, so a full turnaround takes about 2–4 real minutes. On-screen driving speed is clamped so it looks natural rather than sped up.
+- **L-6 Time scale.** A simulated clock runs at **15× real time** (20× until M7; changed by D30) and is adjustable. Process durations (inspection, wash, charging, rental) use realistic simulated minutes, so a full turnaround takes about 2–4 real minutes. On-screen driving speed is clamped so it looks natural rather than sped up.
 - **L-7** Every agent has live state (status, location, speed, current task, ETA, fuel or SoC, odometer) that the UI can read.
 
 ### M1: Block 3, INTERACTION
@@ -525,3 +527,229 @@ Nothing is placed inside the hub fence, on the patrol loop (M5), or within 6 m o
 - **Q2 Airside gate:** **a guarded airside gate near the cargo area** (reusing M5's booth and boom).
 - **Q3 Garage location:** **west of the hub, between its fence and the boulevard** (x ≈ −330).
 - **Q4 Flight-bank tie-in (F-2):** **yes**, an extra visible arrival when a surge starts.
+
+## 12. M7: Ops realism tuning (APPROVED 2026-10-13)
+
+Goal: the hub behaves like a real airport rental operation through a whole day. Demand rises and falls with the flight banks, the exit gates (and other bottlenecks) keep up, and the KPIs land in realistic ranges, all measured over full simulated days. The world, dashboard and visuals are unchanged except for a small demand indicator (R-7).
+
+### 12.1 Decisions
+| # | Decision | Choice |
+|---|---|---|
+| D26 | Exit-gate fix (2026-10-13) | **Faster gate cycle.** Keep 2 gates: release the gate as soon as the car clears the barrier, and shorten the checkout dwell. Simulation only; the layout and visuals are unchanged. |
+| D27 | Demand pattern (2026-10-13) | **An airport day curve** of hourly multipliers on returns and pickups, with the same daily total as today. Weather and what-if surges multiply on top. |
+| D28 | Flights (2026-10-13) | **The flight cadence follows the curve:** still visual only (D20), with more movements at peaks and fewer overnight. |
+| D29 | Targets (2026-10-13) | **Balanced** (§12.4). |
+| D30 | Hub clock (2026-10-13) | **15× real time** (was 20×, L-6 amended). Measured: turnaround 57 → 43 min, because inter-station driving at natural speed counts × the clock. The speed buttons become 15× / 30× / 45×, and a hub day takes 96 real minutes. |
+| D31 | Wash and rain target (2026-10-13) | **Express wash, 60–120 s** (was 90–180 s), plus a **turnaround target of ≤ 55 min in rain** (≤ 45 in clear and overcast). Measured in Stage 4: the wash queue reached 19 at the peaks; with the express wash, a day's turnaround is 44.9 min in clear and 52.2 in rain (rain slows driving by 20%). |
+| D32 | Wash time (2026-10-13) | **45–90 s** (supersedes D31's 60–120 s). At 60–120 s the wash queue still peaked at 12–14. |
+| D33 | Energy at peaks (2026-10-13) | **Charge later** (R-8): a car with ≥ 50% charge or fuel skips the energy stage when 4 or more cars already wait there, and goes straight to the lot on a new **energy bypass lane** (the only layout change in M7). In a heatwave, charger queues spilled back onto the wash exit and jammed. |
+| D34 | Evening peak (2026-10-13) | **Softened from ×1.8 to ×1.4** (raw band value, R-3). After normalisation the morning peak is ×1.68 and the evening ×1.47. At ×1.8 the evening counter backlog took 1–3+ hours to clear. |
+| D35 | Queue targets (2026-10-13) | **Longest queue ≤ 12, and ≤ 8 an hour after each peak** (was ≤ 10 and ≤ 3). Queues run at 2–8 even at midday. |
+| D36 | Gridlock check (2026-10-13) | **A car waiting behind a queued car counts as queued.** This covers a car on its way to its unit that is stopped nose-to-tail behind a queued car, or stopped while the unit's previous occupant, itself queued, is still part-way out. A real deadlock still shows at the head of the line. |
+| D37 | Utilisation target (2026-10-13) | **60–75%** (was 60–70%), to allow for the ±8% seed-to-seed spread in demand. |
+| D38 | Third exit gate (2026-10-13) | **Tried and reverted: 2 gates stay.** Saturated throughput was 28–30 cars/h with 2 or 3 gates; the limit is ready-car supply, not the gates. Gate lanes are now generated from `facility.exitGates`. |
+| D39 | Counter target (2026-10-13) | **No counter-recovery target; served ≥ 90% is the service-level measure**, now measured as checkouts ÷ the pickups customers actually requested. On busy seeds the hub runs out of ready cars at the peaks, and neither 135–150 cars nor a larger departure backlog cleared the counter within an hour. |
+
+### 12.2 Baseline (measured 2026-10-13: seed `goldlane`, one simulated day, flat demand)
+| Weather | Pickups served | Avg turnaround | Avg utilisation | Max queue: gate / wash / counter |
+|---|---|---|---|---|
+| Clear | 97% (465/480) | 57.0 min | 62.7% | 9 / 13 / 6 |
+| Rain | 94% (450/480) | 64.7 min | 62.3% | 11 / 11 / 26 |
+
+Turnaround already misses the target, and the wash queue (13) is a second bottleneck. Both come from the same cause: a unit is released only when the car has left the unit's whole approach lane, and that driving time counts at 20× (L-6).
+
+### 12.3 Requirements
+- **R-1 Faster unit release.**
+  - An exit gate is released as soon as the departing car's rear clears the barrier line.
+  - The same rule applies to the drive-through units (return lanes and wash bays): released once the leaving car's front is off the unit's lane, and the next car can wait right behind the occupant (roll-up staging).
+  - Service bays, chargers, pumps and the tow hand-off keep the whole-body rule and the plain queue. Stage 4 found jams when the next car entered while the previous one was still manoeuvring out, and a car staged behind a charger could wait 20+ minutes while another charger freed up. (This narrows Q1's "all bay types"; approved 2026-10-13.)
+  - Units are still never shared: the next car is granted only once the previous one has physically cleared (L-4 no-overlap is unchanged).
+- **R-2 Checkout dwell.** The gate dwell drops from 10–20 s to **8–15 s** (simulated).
+- **R-3 Airport day curve (D27).** Hourly multipliers by hub clock hour, with a daily mean of exactly 1.0:
+
+  | Hours | 00–05 | 05–07 | 07–10 | 10–16 | 16–20 | 20–24 |
+  |---|---|---|---|---|---|---|
+  | Multiplier | ×0.2 | ×0.8 | **×1.6** | ×1.0 | **×1.4** (D34; was ×1.8) | ×0.7 |
+
+  The values are normalised so the daily total of pickups equals today's (20/h × 24). After normalisation the curve is ×1.68 at 08:30, ×1.05 at 13:00, ×1.47 at 18:00 and ×0.21 at 02:30. The curve is piecewise linear between hour boundaries, so there are no steps. It multiplies with weather (heatwave ×1.4) and the M4 surge (×2).
+- **R-4 Returns follow the curve.** Rental return times are shaped by the same curve, so the hourly returns at peaks are ≥ 1.4× the daily mean and overnight ≤ 0.5×. Rental lengths keep their mean (3.9 h) and minimum (30 min).
+- **R-5 Flights follow the curve (D28).**
+  - The time between movements scales with the multiplier: 40 s ÷ the multiplier, clamped to 30–120 s. That gives 30 s at both peaks, about 38 s at midday and 120 s overnight. (The 30 s floor is because at 25 s a pushback came within 43.8 m of an arrival.)
+  - Airport time maps to hub time at 15 hub seconds per airport second (one hub day = 96 airport minutes; D30).
+  - All M6 rules still hold: one runway occupant, ≥ 45 m separation, consistent gates and the surge extra.
+- **R-6 Determinism and baseline.** The curve depends only on the hub clock, so seed + command log still reproduces a run (S-15), and the M4 shadow baseline follows the same curve (deltas stay valid).
+- **R-7 Demand indicator.**
+  - A compact top-bar readout next to the clock: "Demand ×1.6 · Morning peak", "×1.0 · Midday", "×0.2 · Overnight".
+  - The value includes weather and an active surge. It has a text label and doesn't rely on colour alone.
+- **R-8 Charge later (D33).** When 4 or more cars already wait for the energy station, a car arriving with ≥ 50% charge or fuel skips it and parks in the ready lot. It reaches the lot on the energy bypass lane, which runs just east of the fuel pumps, from the energy-area entrance (170, −10) to the merge after the pumps (170, 72). It never drives through the charger or pump stalls.
+
+### 12.4 Calibration targets (D29, Balanced)
+These are measured over **one full simulated day** for seeds 1–3 in clear, overcast and rain, by a new day-long soak (§12.5):
+
+| KPI | Target |
+|---|---|
+| Average turnaround (mean of the 2-hour rolling KPI across the day) | ≤ 45 min in clear and overcast; ≤ 55 min in rain (D31) |
+| Average utilisation | 60–75% (D37) |
+| Pickups served (checkouts ÷ the pickups customers requested, D39) | ≥ 90% |
+| Gate, wash, service, charger queues | ≤ 12 at all times, and back to ≤ 8 within 60 simulated minutes after each peak ends (D35) |
+| Counter queue | Not a target (D39); shown live in the UI |
+| Overlaps and gridlock | None (L-4, unchanged; D36 defines a queued car) |
+
+Heatwave (×1.4 on top of the peaks, ×2.5 at the evening peak) is a stress case: no overlaps or gridlock, served ≥ 80%, and queues recover after the peak (Q2).
+
+### 12.5 Testing and budgets
+- **New day-long soak:** 3 seeds × 4 weathers × 24 simulated hours, checking the targets above. It runs in the soak suite, not the default `npm test`.
+- **Unit tests:** the curve's shape and normalisation, return shaping, the release rule, the dwell range, the flight cadence by hour and the indicator text.
+- **Existing tests whose calibrated numbers change** (for example M1 soak floors, or M4 surge thresholds) will be listed in Stage 3 with the reason, and no assertion is weakened without a note.
+- **Budgets are unchanged:** the simulation steps stay ≤ 4 ms per frame at 60× with the baseline (§9.6), and the bundle and draw calls are as for M6.
+
+### 12.6 Resolved (approved 2026-10-13: all proposed defaults accepted)
+- **Q1 Release rule scope:** **all bay types** (R-1), since the wash queue is a bottleneck too, rather than gates only.
+- **Q2 Heatwave:** **a stress case** with relaxed targets (served ≥ 80%) rather than the full Balanced targets.
+- **Q3 Curve values:** **as in R-3**.
+- **Q4 Demand indicator:** **yes**, next to the clock (R-7).
+
+## 13. M8: Ship & share (APPROVED 2026-10-13; implemented)
+
+Goal: anyone can open the world from a link, a downloaded file or an embed, land on exactly the view that was shared, present it unattended, and understand it without help from us. The simulation, the world and the dashboard behave as in M7. M8 adds ways in, a presentation mode, a capture tool and documentation.
+
+### 13.1 Decisions
+| # | Decision | Choice |
+|---|---|---|
+| D40 | Distribution (2026-10-13) | **All three:** a GitHub Pages site, a downloadable file on GitHub Releases, and an embeddable mode for iframes. The offline single file (N-1) stays the build output. |
+| D41 | Deep links (2026-10-13) | **Full deep links** (§13.3) and a **Copy link** button that captures the current view. |
+| D42 | Link vs saved preferences (2026-10-13) | **The link wins for that visit; saved preferences are untouched** unless the viewer changes something. Invalid values are ignored and defaults are used. |
+| D43 | Presentation (2026-10-13) | **Kiosk auto-tour** and a **screenshot button**. (No separate clean-view toggle.) |
+| D44 | Kiosk input (2026-10-13) | **Input pauses the tour, and it resumes after 60 s idle.** Esc or a button leaves kiosk mode. |
+| D45 | Screenshot content (2026-10-13) | **The 3D view plus a baked-in caption** (brand, area, hub clock, weather). Dashboard panels are not captured. |
+| D46 | Publishing (2026-10-13) | **Pages redeploys on every push to `main`, and a version tag (`v*`) creates a Release** with the file attached. Workflows run only after the user pushes. |
+| D47 | Documentation (2026-10-13) | **README, in-app help overlay and CHANGELOG.** |
+
+### 13.2 Publishing (D40, D46)
+- **SH-1 Pages workflow.** `.github/workflows/pages.yml` runs on push to `main` (and by hand). It installs, runs `npm run check` and the E2E suite (Chromium), builds for production, then deploys `dist/index.html` to GitHub Pages. If any step fails, nothing is deployed. The soak suite is not run in CI (too slow); it stays a local gate before a release.
+- **SH-2 Release workflow.** `.github/workflows/release.yml` runs on a pushed tag `v*.*.*`. It runs the same checks and build, then creates a GitHub Release named after the tag, with the file attached as `goldlane-hub-<version>.html` and the notes taken from that version's CHANGELOG section. The tag must match the version in `package.json`, or the workflow fails.
+- **SH-3 Version.** `package.json` moves to `0.8.0` for M8. The version and build date are compiled in and shown in the help overlay (SH-12).
+- **SH-4 Still one offline file.** The Pages site, the Release file and a local build are the same single `index.html` (N-1). It makes no network requests, the CSP is unchanged, and it still opens from `file://`.
+- **Preconditions (user actions, not code):**
+  - In the repo settings, set Pages → Source to "GitHub Actions".
+  - GitHub Pages on a private repo needs a paid plan. On a public repo the site is public.
+  - Nothing is published until the user pushes.
+
+### 13.3 Deep links (D41, D42)
+- **SH-5 URL options.** These are read once at start from the query string (`?…`). Every option is optional, and unknown keys are ignored.
+
+  | Key | Values | Default | Effect |
+  |---|---|---|---|
+  | `area` | `overview`, `return`, `wash`, `energy`, `lot`, `airport` | `overview` | Starting area (I-5) |
+  | `cam` | `x,z,azimuth,elevation,distance` (numbers; angles in degrees) | the area's view | Exact camera, clamped to the camera limits (I-1). It overrides `area`'s camera but keeps its highlight. |
+  | `weather` | `clear`, `overcast`, `rain`, `heatwave` | `clear` | Starting weather |
+  | `tod` | `auto`, `day`, `night` | `auto` | Time of day |
+  | `speed` | `0` (paused), `15`, `30`, `45` | `15` | Simulation speed |
+  | `labels` | `0`, `1` | saved preference | Building labels (not saved, D42) |
+  | `theme` | `dark`, `light` | saved preference | UI theme (not saved, D42) |
+  | `quality` | `auto`, `0`, `1`, `2` | `auto` | Quality tier. A number pins it and turns adaptive switching off. |
+  | `seed` | 1–32 characters from `A–Z a–z 0–9 - _` | `goldlane` | Simulation seed for the hub and its baseline |
+  | `preset` | `fridayRush`, `washDown`, `heatCharger`, `gateClosure` | none | Starts that what-if preset (M4) |
+  | `select` | a facility or unit id, e.g. `wash1`, `gate2`, `terminal` | none | Opens its details, as if clicked |
+  | `kiosk` | `1` | off | Starts the kiosk tour (SH-9) |
+  | `embed` | `1` | off | Embed mode (SH-8) |
+
+- **SH-6 Validation.** Parsing is a pure function from the query string to a typed link state, plus the list of ignored keys.
+  - An invalid value is dropped, so that option uses its default. It is logged once with `console.info`, never thrown or shown as an error.
+  - If a key appears twice, the first one wins.
+- **SH-7 Copy link.** A "Copy link" item in the user menu builds a link to the current state.
+  - The link covers: area, camera, weather, time of day, speed, labels, theme, pinned quality, seed, the selected facility or unit, and `embed`/`kiosk` if active.
+  - It includes the active preset only when the current what-if state is an unmodified preset.
+  - Default values are left out to keep links short.
+  - It copies to the clipboard and confirms with a short "Link copied" notice. If the clipboard is unavailable (e.g. `file://` or a refused permission), a small dialog shows the link already selected for manual copy.
+  - A shared link reproduces the same *settings*, not the same moment. The hub always starts at 08:00 (L-6), and the same seed plus preset gives the same run (S-15).
+
+### 13.4 Embed mode (D40)
+- **SH-8 Embed (`?embed=1`).**
+  - Hides the top bar, KPI cards, process tracker, live table, alerts and what-if drawer.
+  - Shows a compact overlay: the brand mark, the hub clock, the demand readout (R-7), and an "Open full view ↗" link. The link opens the same URL without `embed` in a new tab.
+  - The camera works as usual (drag, wheel, touch). Keyboard shortcuts only act while the frame has focus, and the page never scrolls the host page.
+  - It fits any frame size down to 320 × 240, and respects reduced motion (X-2).
+  - The README gives a copy-paste `<iframe>` snippet.
+  - Embedding is allowed on any site: a `<meta>` CSP cannot restrict `frame-ancestors`, and Pages can't set headers.
+
+### 13.5 Kiosk auto-tour (D43, D44)
+- **SH-9 Tour.** Started by `?kiosk=1` or by "Start tour" in the user menu.
+  - Hides the panels as in embed mode and shows a caption bar with the area name, hub clock, demand and one live fact for that area (e.g. "Wash queue 3", "Counter: 0 waiting", "Next landing in 0:40").
+  - Visits overview → return → wash → energy → lot → airport and repeats, **20 s per area**. It uses the usual camera flight and a slow orbit while it stays on an area.
+  - With reduced motion it cuts between areas instead of flying, and doesn't orbit.
+  - Keeps the screen awake with the Wake Lock API where it is available, and ignores it silently elsewhere.
+- **SH-10 Input during the tour (D44).**
+  - Any pointer, wheel, touch or key input pauses the tour and gives normal control.
+  - A "Tour paused · resumes in 60 s" chip counts down and resets on each input.
+  - Esc, or the chip's "Exit tour", leaves kiosk mode and restores the panels.
+  - The tour never changes simulation settings.
+
+### 13.6 Screenshot (D45)
+- **SH-11 Save a picture.** A camera button in the top bar (or the `P` key) saves `goldlane-hub-YYYYMMDD-HHMMSS.png` to the downloads folder, named with the viewer's local time.
+  - The image is the 3D view at the current canvas resolution (capped at 4096 px wide), with a caption strip along the bottom: "GoldLane Hub · Pacific Gateway · <area> · <hub clock> · <weather>".
+  - Dashboard panels, the DOM label overlay and the selection outline are not in the image. The world's own 3D text (signs) is included.
+  - It works offline and from `file://`. It captures the next fully rendered frame, so the image is never blank.
+
+### 13.7 Help and documentation (D47)
+- **SH-12 Help overlay.** A "?" button in the top bar, or the `?` key, opens a dialog with:
+  - controls for mouse, touch and keyboard, including the new `P` and `?` keys;
+  - a legend: status colours, label states and the demand readout;
+  - what each KPI means, and how the speed and what-if controls work;
+  - the note that all brands and names are fictional (N-7);
+  - the version and build date (SH-3).
+
+  The dialog traps focus, closes with Esc or its close button, and returns focus to where it was. It is not shown automatically.
+- **SH-12a Quick help on hover (Q4).** Hovering over or focusing the "?" button shows a small popover with the five most-used controls (drag, wheel, area buttons, `P`, `?`) and "Click for full help". It hides when the pointer or focus leaves, never traps focus, and is announced as the button's description. On touch screens (no hover), a tap opens the full dialog.
+- **SH-13 README.md.** It covers:
+  - what the world is, with screenshots generated by a script into `docs/media/`, and the live Pages link;
+  - features by milestone;
+  - quick start (`npm ci`, `npm run dev`), and the build and test commands (check, soak, E2E);
+  - the deep-link table (SH-5), the embed snippet and kiosk usage;
+  - the tech stack, the folder layout and the spec-driven workflow (`docs/`);
+  - the fictional-brand note.
+
+  The README states the MIT licence (Q1).
+- **SH-15 Licence.** A `LICENSE` file with the MIT licence, © 2026 Subhadip Dutta. `package.json` gets `"license": "MIT"`. The fictional-brand note (N-7) still applies to names and marks in the world.
+- **SH-14 CHANGELOG.md.** In "Keep a Changelog" format, with one entry per milestone. M1–M7 are added retroactively as 0.1.0–0.7.0, with dates from the git history; M8 is 0.8.0.
+
+### 13.8 Non-functional
+- No new runtime dependencies. Bundle growth ≤ 15 KB gzipped (budget 600 KB).
+- No network access at runtime, and the CSP is unchanged (N-1, SH-4). Downloads use a `blob:` link. The clipboard uses the async Clipboard API, with the SH-7 fallback.
+- Embed and kiosk modes keep the draw-call budgets (≤ 300 / ≤ 150 by tier) and the simulation budgets.
+- Accessibility:
+  - The new buttons have labels and keyboard access.
+  - The help dialog and the copy-link fallback trap focus.
+  - The kiosk caption and the "Link copied" notice use a polite live region.
+
+### 13.9 User stories
+- *As a team lead,* I paste a link in chat and colleagues land on the wash area in rain with the "Wash tunnel down" preset running.
+- *As a presenter,* I put the world on a lobby screen with `?kiosk=1`. It tours on its own, and if someone pokes it, it resumes a minute later.
+- *As a portfolio owner,* I embed the world in a page with an iframe and a link to the full view.
+- *As a reviewer,* I download the release file and open it offline.
+- *As a newcomer,* I press `?` to learn the controls and what the KPIs mean, and the README tells me how to run and test it.
+- *As anyone,* I press `P` to save a captioned picture to share.
+
+### 13.10 Testing
+- **Unit:**
+  - link parsing and formatting: round trip, every key valid and invalid, defaults omitted, duplicate keys;
+  - the kiosk scheduler: order, 20 s dwell, pause and resume at 60 s, exit;
+  - caption and file-name text;
+  - the "is an unmodified preset" check;
+  - help content: the keys listed match the key handler.
+- **E2E:**
+  - A deep link applies area, weather, time of day, speed, labels, preset and selection, and leaves saved preferences unchanged.
+  - Copy link round-trips: opening the copied link gives the same state.
+  - Embed hides the panels, and the "Open full view" link drops `embed`.
+  - Kiosk moves to the next area after 20 s, pauses on input and exits with Esc.
+  - The screenshot downloads a non-blank PNG of the canvas size.
+  - Help opens with `?`, traps focus and closes with Esc.
+  - Draw calls in embed and kiosk modes stay in budget, and the bundle stays ≤ 600 KB.
+- **Workflows:** a unit test checks that both workflow files exist and run `npm run check`, the E2E suite and the build, and that the release job checks the tag against `package.json`. They are proven for real on the first push (a user action).
+
+### 13.11 Resolved (2026-10-13)
+- **Q1 Licence:** **MIT** (SH-15).
+- **Q2 E2E in CI:** **yes**, Chromium only (about 6 min per push). The soak stays local.
+- **Q3 Kiosk areas:** **all six areas**, 20 s each (a 2-minute loop).
+- **Q4 Help on first visit:** **not shown automatically; quick help on hover** over the "?" button, full help on click or `?` (SH-12a).
+

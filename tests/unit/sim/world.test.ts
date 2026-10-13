@@ -48,7 +48,7 @@ describe('createSim: clocks (L-6, A2)', () => {
     expect(sim.snapshot().simTimeSec).toBeCloseTo(20 * rates.stepWallSec * rates.timeScale, 6);
     sim.apply({ type: 'setTimeScale', value: 40 });
     steps(sim, 20);
-    expect(sim.snapshot().simTimeSec).toBeCloseTo(20 + 20 * rates.stepWallSec * 40, 6);
+    expect(sim.snapshot().simTimeSec).toBeCloseTo(20 * rates.stepWallSec * rates.timeScale + 20 * rates.stepWallSec * 40, 6);
     expect(sim.snapshot().timeScale).toBe(40);
   });
 

@@ -6,11 +6,13 @@ import type { AreaId, AreaLayout } from '../../layout/hub';
 import type { DayNight } from '../../render/environment';
 import type { Snapshot } from '../../sim/world';
 import type { Alert } from '../alerts';
+import { demandText } from '../demand';
 import { formatClock } from '../format';
 import { AreaSwitcher } from '../m1/AreaSwitcher';
 import { search, type SearchResult } from '../search';
 import type { Theme } from '../theme';
 import { SpeedControl, type Speed } from '../m4/SpeedControl';
+import { HelpButton } from '../m8/HelpButton';
 
 export interface TopBarProps {
   readonly snapshot: Snapshot | null;
@@ -30,7 +32,7 @@ export interface TopBarProps {
   readonly onOpenAlerts: () => void;
   readonly onAlert: (alert: Alert) => void;
   readonly onPick: (result: SearchResult) => void;
-  /** Simulation speed (S-18): 0 = paused, 1–3 = 20× / 40× / 60×. */
+  /** Simulation speed (S-18): 0 = paused, 1–3 = 15× / 30× / 45× (D30). */
   readonly speed: Speed;
   readonly onSpeed: (speed: Speed) => void;
   /** Active-scenario chips (S-7); a click opens the What-if drawer. */
@@ -39,7 +41,14 @@ export interface TopBarProps {
   readonly onOpenWhatIf: () => void;
   /** Building labels on/off (I-4): role="switch" "Building labels" in the user menu. */
   readonly labelsOn: boolean;
+  /** Demand the hub is experiencing (R-7): shown next to the clock with aria-label "Demand". */
+  readonly demand: { readonly factor: number; readonly period: string } | null;
   readonly onLabels: (on: boolean) => void;
+  /** M8 (§13): "Copy link" and "Start tour" in the user menu, a "Save screenshot" button and the help button. */
+  readonly onCopyLink: () => void;
+  readonly onStartTour: () => void;
+  readonly onScreenshot: () => void;
+  readonly onOpenHelp: () => void;
 }
 
 const DAY_NIGHT: readonly { readonly value: DayNight; readonly label: string }[] = [
@@ -49,6 +58,9 @@ const DAY_NIGHT: readonly { readonly value: DayNight; readonly label: string }[]
 ];
 
 const LISTBOX_ID = 'search-results';
+
+/** True where the primary pointer can hover (quick help on hover, SH-12a); assumed true without matchMedia. */
+const hoverCapable = (): boolean => typeof matchMedia !== 'function' || matchMedia('(hover: hover)').matches;
 
 /**
  * Top bar (D-2), a glass panel:
@@ -63,6 +75,8 @@ const LISTBOX_ID = 'search-results';
  *  - user: button labelled "User menu"; its menu holds role="switch" "Light theme" (aria-checked) (X-4)
  *  - what-if (M4): "What-if scenarios" button, active-scenario chips (a list labelled "Active scenario",
  *    only while any lever is set) and the simulation speed control
+ *  - share (M8): "Save screenshot" button, the "Help" button with quick help on hover, and "Copy link"
+ *    and "Start tour" in the user menu
  */
 export function TopBar(props: TopBarProps): JSX.Element {
   const [query, setQuery] = useState('');
@@ -201,6 +215,17 @@ export function TopBar(props: TopBarProps): JSX.Element {
           {props.snapshot ? formatClock(props.snapshot.clockHours) : '--:--'}
         </time>
 
+        {props.demand ? (
+          <span class="demand" aria-label="Demand">
+            {demandText(props.demand)}
+          </span>
+        ) : null}
+
+        <button type="button" class="icon-button" aria-label="Save screenshot" title="Save screenshot (P)" onClick={props.onScreenshot}>
+          <span aria-hidden="true">📷</span>
+        </button>
+        <HelpButton onOpen={props.onOpenHelp} hoverCapable={hoverCapable()} />
+
         <div class="menu-anchor">
           <button
             type="button"
@@ -280,6 +305,26 @@ export function TopBar(props: TopBarProps): JSX.Element {
                 }}
               >
                 Building labels
+              </button>
+              <button
+                type="button"
+                class="menu-item"
+                onClick={() => {
+                  setUserOpen(false);
+                  props.onCopyLink();
+                }}
+              >
+                Copy link
+              </button>
+              <button
+                type="button"
+                class="menu-item"
+                onClick={() => {
+                  setUserOpen(false);
+                  props.onStartTour();
+                }}
+              >
+                Start tour
               </button>
             </div>
           ) : null}

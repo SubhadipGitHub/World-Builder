@@ -15,3 +15,13 @@ export function refuel(fuelPct: number, litresPerMin: number, tankL: number, dtS
   const added = ((litresPerMin * Math.max(0, dtSimSec)) / 60 / tankL) * 100;
   return Math.min(100, fuelPct + added);
 }
+
+/** Charge-later policy (R-8, D33): a car at least this full may skip a long energy queue. */
+export const CHARGE_LATER_LEVEL = 50;
+/** …when at least this many are already waiting for that station. */
+export const CHARGE_LATER_QUEUE = 4;
+
+/** True when a washed car should skip charging/refuelling and go straight to the lot (R-8). */
+export function shouldChargeLater(levelPct: number, waiting: number): boolean {
+  return levelPct >= CHARGE_LATER_LEVEL && waiting >= CHARGE_LATER_QUEUE;
+}

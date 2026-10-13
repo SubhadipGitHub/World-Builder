@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   CYCLE_SEC,
+  MAX_INTERVAL,
+  MIN_INTERVAL,
+  hubHoursAt,
+  movementInterval,
   GEAR_DOWN_BELOW,
   GLIDE_DEG,
   INITIAL_GATES,
@@ -28,7 +32,7 @@ function sample(s: FlightSchedule, from: number, to: number, each: (t: number, l
   for (let t = from; t < to; t += DT) each(t, s.aircraftAt(t));
 }
 
-describe('flight schedule: cadence and determinism (F-1, D23)', () => {
+describe('flight schedule: cadence and determinism (F-1, D23, R-5)', () => {
   it('is deterministic', () => {
     const a = createFlightSchedule();
     const b = createFlightSchedule();
@@ -52,20 +56,24 @@ describe('flight schedule: cadence and determinism (F-1, D23)', () => {
       const now = new Map(list.map((a) => [a.id, a]));
       for (const a of list) {
         const p = prev.get(a.id);
-        if (p && p.y > 0.5 && a.y <= 0.5 && a.phase === 'landing') touchdowns.push(t);
+        // The approach → landing change (M7: touchdowns no longer fall on the 0.25 s sample grid).
+        if (p && p.phase === 'approach' && a.phase === 'landing') touchdowns.push(t);
         if (p && p.y <= 0.5 && a.y > 0.5 && (a.phase === 'takeoff' || a.phase === 'climb')) liftoffs.push(t);
       }
       prev = now;
     });
     expect(touchdowns.length).toBeGreaterThanOrEqual(CYCLES - 1);
     expect(liftoffs.length).toBeGreaterThanOrEqual(CYCLES - 1);
-    const gaps = touchdowns.slice(1).map((t, i) => t - (touchdowns[i] ?? 0));
-    for (const g of gaps) expect(g).toBeCloseTo(CYCLE_SEC, 0);
+    // M7 (K8): each cycle lasts two movement intervals at the hub hour of its touchdown.
+    touchdowns.slice(1).forEach((t, i) => {
+      const prev = touchdowns[i] ?? 0;
+      expect(t - prev).toBeCloseTo(2 * movementInterval(hubHoursAt(prev)), 0);
+    });
     // Take-offs fall between landings.
     for (const t of liftoffs.slice(1, -1)) {
       const before = touchdowns.filter((x) => x < t).pop() ?? -Infinity;
       expect(t - before).toBeGreaterThan(10);
-      expect(t - before).toBeLessThan(CYCLE_SEC);
+      expect(t - before).toBeLessThan(2 * movementInterval(hubHoursAt(before)));
     }
   });
 });
@@ -222,5 +230,88 @@ describe('flight schedule: extra arrival for a surge (F-2, H5)', () => {
       if (list.some((a) => a.gate === 'remote' && a.phase === 'parked')) remote = true;
     });
     expect(remote).toBe(true);
+  });
+});
+
+describe('flight cadence follows the day curve (R-5, K8)', () => {
+  it('maps airport time to hub hours from 08:00 at 15 hub seconds per airport second', () => {
+    expect(hubHoursAt(0)).toBe(8);
+    expect(hubHoursAt(240)).toBeCloseTo(9, 9);
+    expect(hubHoursAt(96 * 60)).toBeCloseTo(8, 9);
+  });
+
+  it('is about 25 s at the evening peak, 40 s at midday and up to 120 s overnight', () => {
+    expect(movementInterval(18)).toBe(MIN_INTERVAL);
+    expect([25, 30]).toContain(MIN_INTERVAL);
+    expect(movementInterval(13)).toBeGreaterThan(36);
+    expect(movementInterval(13)).toBeLessThan(44);
+    expect(movementInterval(2.5)).toBe(MAX_INTERVAL);
+    for (let h = 0; h < 24; h += 0.25) {
+      expect(movementInterval(h)).toBeGreaterThanOrEqual(MIN_INTERVAL);
+      expect(movementInterval(h)).toBeLessThanOrEqual(MAX_INTERVAL);
+    }
+  });
+
+  it('keeps one runway occupant, separation and consistent gates over a whole hub day', () => {
+    const s = createFlightSchedule();
+    s.scheduleExtra(40); // a surge during the morning peak
+    s.scheduleExtra(2_400); // and one at the evening peak
+    const DAY = 96 * 60;
+    for (let t = 0; t < DAY; t += 0.5) {
+      const list = s.aircraftAt(t);
+      expect(list.filter(onRunway).length, `t=${String(t)}`).toBeLessThanOrEqual(1);
+      for (let i = 0; i < list.length; i++) {
+        for (let j = i + 1; j < list.length; j++) {
+          const a = list[i]!;
+          const b = list[j]!;
+          expect(Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z), `t=${String(t)} ${a.id} vs ${b.id}`).toBeGreaterThanOrEqual(Math.max(45, JET_SPAN + 6));
+        }
+      }
+      const held = [...s.gatesAt(t).values()].filter((v) => v !== null);
+      expect(new Set(held).size).toBe(held.length);
+    }
+  }, 300_000);
+
+  it('flies more often at the peaks than overnight', () => {
+    const s = createFlightSchedule();
+    const count = (fromHour: number, hours: number): number => {
+      const t0 = ((fromHour - 8 + 24) % 24) * 240;
+      let n = 0;
+      let prev = new Set<string>();
+      for (let t = t0; t < t0 + hours * 240; t += 1) {
+        const touching = new Set(s.aircraftAt(t).filter((a) => a.phase === 'landing').map((a) => a.id));
+        for (const id of touching) if (!prev.has(id)) n++;
+        prev = touching;
+      }
+      return n;
+    };
+    expect(count(16, 4)).toBeGreaterThan(2 * count(0, 4));
+  }, 300_000);
+});
+
+
+describe('next touchdown (M8 SH-9, architecture §21)', () => {
+  it('counts down to the next approach → landing change, also after a surge extra', () => {
+    const s = createFlightSchedule();
+    s.scheduleExtra(300);
+    const touchdowns: number[] = [];
+    let prev = new Map<string, AircraftPose>();
+    sample(s, 0, 900, (t, list) => {
+      for (const a of list) {
+        const p = prev.get(a.id);
+        if (p && p.phase === 'approach' && a.phase === 'landing') touchdowns.push(t);
+      }
+      prev = new Map(list.map((a) => [a.id, a]));
+    });
+    expect(touchdowns.length).toBeGreaterThan(5);
+    for (const t of [0, 17.25, 123.5, 301, 455.75, 640]) {
+      const next = touchdowns.find((x) => x > t);
+      if (next === undefined) continue;
+      // Sampled touchdowns are seen up to one sample late.
+      const got = s.nextTouchdown(t);
+      expect(got).not.toBeNull();
+      expect(next - t - (got ?? 0)).toBeGreaterThanOrEqual(-1e-6);
+      expect(next - t - (got ?? 0)).toBeLessThanOrEqual(DT + 1e-6);
+    }
   });
 });

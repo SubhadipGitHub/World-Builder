@@ -60,6 +60,16 @@ export interface HubTestHooks {
   aircraft(): readonly { readonly id: string; readonly phase: string; readonly x: number; readonly y: number; readonly z: number; readonly gate: string | null }[];
   /** Airport clock (H2): advances with the simulation speed, frozen while paused. */
   airportTime(): number;
+  /** M8 (§21): display mode. */
+  mode(): 'normal' | 'embed' | 'kiosk';
+  /** The link "Copy link" would copy now. */
+  link(): string;
+  /** Kiosk tour state, or null outside kiosk mode. */
+  kiosk(): { readonly phase: 'touring' | 'paused' | 'exited'; readonly area: AreaId; readonly resumeInSec: number | null } | null;
+  /** Advances the kiosk tour's wall clock by `sec` (no camera wait). */
+  advanceKiosk(sec: number): void;
+  /** True while the help dialog is open. */
+  help(): boolean;
 }
 
 declare global {

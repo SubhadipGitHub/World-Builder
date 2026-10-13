@@ -85,7 +85,7 @@ test('a unit can be taken offline from its detail panel; the last one cannot (S-
   expect(errors).toEqual([]);
 });
 
-test('pause freezes the simulation but not the camera; 60× runs about 3× faster than 20× (S-18, S-19)', async ({ page }) => {
+test('pause freezes the simulation but not the camera; 45× runs about 3× faster than 15× (S-18, S-19, D30)', async ({ page }) => {
   await open(page);
   const speed = page.getByRole('group', { name: 'Simulation speed' });
   await speed.getByRole('button', { name: 'Pause' }).click();
@@ -104,8 +104,8 @@ test('pause freezes the simulation but not the camera; 60× runs about 3× faste
     const b = await page.evaluate(() => ({ t: window.__hub!.simTimes().visible, wall: performance.now() }));
     return (b.t - a.t) / ((b.wall - a.wall) / 1000);
   };
-  const normal = await rate('20×');
-  const fast = await rate('60×');
+  const normal = await rate('15×');
+  const fast = await rate('45×');
   expect(normal).toBeGreaterThan(0);
   expect(fast / normal).toBeGreaterThan(2);
   const t = await simTimes(page);

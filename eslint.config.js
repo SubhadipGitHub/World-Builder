@@ -35,5 +35,5 @@ export default tseslint.config(
       '@typescript-eslint/no-confusing-void-expression': 'off',
     },
   },
-  { files: ['*.config.{js,ts}', 'eslint.config.js'], ...tseslint.configs.disableTypeChecked },
+  { files: ['*.config.{js,ts}', 'eslint.config.js', 'scripts/**/*.mjs'], ...tseslint.configs.disableTypeChecked },
 );

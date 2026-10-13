@@ -7,6 +7,13 @@ export interface ResourceUnit {
 export interface Grant {
   readonly agentId: string;
   readonly unitId: string;
+  /** Granted as the unit's next (roll-up staging, K3): it waits behind the occupant. */
+  readonly next?: boolean;
+}
+
+export interface PoolOptions {
+  /** Two-deep lanes (K3): while a unit is occupied, the first matching waiter may be granted as its next. */
+  readonly staging?: boolean;
 }
 
 /**
@@ -34,6 +41,8 @@ export interface ResourcePool {
    */
   setOnline(unitId: string, online: boolean): void;
   isOnline(unitId: string): boolean;
+  /** The agent staged behind the occupant (K3), or null. */
+  nextOf(unitId: string): string | null;
 }
 
 interface Waiter {
@@ -42,7 +51,7 @@ interface Waiter {
 }
 
 /** Throws on duplicate unit ids or an empty unit list. */
-export function createResourcePool(units: readonly ResourceUnit[]): ResourcePool {
+export function createResourcePool(units: readonly ResourceUnit[], options: PoolOptions = {}): ResourcePool {
   if (units.length === 0) throw new Error('A resource pool needs at least one unit');
   const occupants = new Map<string, string | null>();
   for (const u of units) {
@@ -51,6 +60,9 @@ export function createResourcePool(units: readonly ResourceUnit[]): ResourcePool
   }
   const holding = new Map<string, string>();
   const offline = new Set<string>();
+  /** Roll-up staging (K3): the agent waiting behind each occupied unit. */
+  const next = new Map<string, string>();
+  const staging = options.staging ?? false;
   let queue: Waiter[] = [];
 
   const matches = (u: ResourceUnit, tag: string | undefined): boolean => tag === undefined || u.tag === tag;
@@ -68,10 +80,19 @@ export function createResourcePool(units: readonly ResourceUnit[]): ResourcePool
       const grants: Grant[] = [];
       queue = queue.filter((w) => {
         const unit = units.find((u) => free(u) && matches(u, w.tag));
-        if (!unit) return true;
-        occupants.set(unit.id, w.agentId);
-        holding.set(w.agentId, unit.id);
-        grants.push({ agentId: w.agentId, unitId: unit.id });
+        if (unit) {
+          occupants.set(unit.id, w.agentId);
+          holding.set(w.agentId, unit.id);
+          grants.push({ agentId: w.agentId, unitId: unit.id });
+          return false;
+        }
+        if (!staging) return true;
+        // No free unit: roll up behind an occupied online unit that has nobody staged yet.
+        const behind = units.find((u) => occupants.get(u.id) !== null && !offline.has(u.id) && !next.has(u.id) && matches(u, w.tag));
+        if (!behind) return true;
+        next.set(behind.id, w.agentId);
+        holding.set(w.agentId, behind.id);
+        grants.push({ agentId: w.agentId, unitId: behind.id, next: true });
         return false;
       });
       return grants;
@@ -80,11 +101,20 @@ export function createResourcePool(units: readonly ResourceUnit[]): ResourcePool
       const occ = occupants.get(unitId);
       if (occ === undefined) throw new Error(`Unknown unit ${unitId}`);
       if (occ === null) throw new Error(`Unit ${unitId} is already free`);
-      occupants.set(unitId, null);
       holding.delete(occ);
+      // The staged agent (if any) takes over: it is already in the unit's lane.
+      const staged = next.get(unitId);
+      next.delete(unitId);
+      occupants.set(unitId, staged ?? null);
     },
     cancel(agentId) {
       queue = queue.filter((w) => w.agentId !== agentId);
+      for (const [unitId, agent] of next) {
+        if (agent === agentId) {
+          next.delete(unitId);
+          holding.delete(agentId);
+        }
+      }
     },
     occupant: (unitId) => occupants.get(unitId) ?? null,
     unitOf: (agentId) => holding.get(agentId) ?? null,
@@ -96,5 +126,6 @@ export function createResourcePool(units: readonly ResourceUnit[]): ResourcePool
       else offline.add(unitId);
     },
     isOnline: (unitId) => !offline.has(unitId),
+    nextOf: (unitId) => next.get(unitId) ?? null,
   };
 }

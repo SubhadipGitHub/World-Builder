@@ -113,6 +113,9 @@ describe('scenario commands: crews (S-3)', () => {
   function washDurations(sim: Sim, steps: number): number[] {
     const first = new Map<string, { t: number; p: number }>();
     const out: number[] = [];
+    // Jobs already running when the crew changed keep their old duration (S-3): only count jobs
+    // first seen after the change, by when any older job would show more progress.
+    const since = sim.snapshot().simTimeSec + 15;
     run(sim, steps, () => {
       const snap = sim.snapshot();
       for (const r of snap.resources) {
@@ -120,7 +123,8 @@ describe('scenario commands: crews (S-3)', () => {
         const key = `${r.id}:${r.occupantId}`;
         const seen = first.get(key);
         if (!seen) {
-          if (r.progress < 0.05) first.set(key, { t: snap.simTimeSec, p: r.progress });
+          if (r.progress < 0.05 && snap.simTimeSec >= since) first.set(key, { t: snap.simTimeSec, p: r.progress });
+          else if (r.progress >= 0.05) first.set(key, { t: Infinity, p: 0 });
         } else if (r.progress > 0.6 && r.progress < 1) {
           out.push((snap.simTimeSec - seen.t) / (r.progress - seen.p));
           first.set(key, { t: Infinity, p: 0 });

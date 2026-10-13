@@ -3,6 +3,8 @@ export const brand = {
   company: 'GoldLane Rentals',
   appName: 'GoldLane Hub',
   hubName: 'Pacific Gateway Fleet Ops',
+  /** Short site name for captions (M8 SH-11). */
+  siteName: 'Pacific Gateway',
   airport: 'Pacific Gateway International Airport',
   counterName: 'GoldLane Express',
   idPrefix: 'GL',

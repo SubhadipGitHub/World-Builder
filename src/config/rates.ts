@@ -2,13 +2,15 @@ import type { IdmParams } from '../sim/traffic/idm';
 
 // Lifecycle rates and durations (L-1, L-2, L-6). Durations are simulated seconds.
 export const rates = {
-  timeScale: 20,
+  // 15× since M7 (D30): turnaround counts inter-station driving × this factor (§20.1).
+  timeScale: 15,
   stepWallSec: 0.05,
   maintenanceChance: 0.1,
   severeChance: 0.02,
   evStageSocPct: 80,
   inspectionSimSec: { min: 60, max: 120 },
-  washSimSec: { min: 90, max: 180 },
+  // Express tunnel since M7 (D31, D32): the wash was the peak bottleneck (queue 19 at 90–180 s).
+  washSimSec: { min: 45, max: 90 },
   serviceSimSec: { min: 900, max: 2400 },
   // Compressed so the on-rent pool settles near 65% utilisation at 20x
   // (Little's law: 20 pickups/h × 3.9 h ≈ 78 of 120 cars on rent).
