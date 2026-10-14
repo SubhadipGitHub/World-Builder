@@ -52,6 +52,21 @@ npm run test:e2e   # builds the test bundle, then runs the Playwright end-to-end
 npm run screenshots  # regenerates the images in docs/media
 ```
 
+## Car models
+
+The seven rental classes are built in Blender by Python scripts in `tools/blender/` (one per class, plus
+`common.py`). The packed models in `src/render/assets/models/` are committed, so building and testing never
+need Blender. To change a car, edit its script and rebuild:
+
+```bash
+npm run models                 # all classes (needs Blender 5.2; set BLENDER_PATH if it isn't installed at the default path)
+npm run models -- minivan ev   # just some classes
+MODELS_PREVIEW=out npm run models -- sedan   # also render a preview image of each class into out/
+```
+
+Each run checks the triangle budgets, the footprint and ground contact before exporting, and updates
+`manifest.json`, which the unit tests compare with the committed files.
+
 ## Deep links
 
 Any of these query options can be added to the page address, for example

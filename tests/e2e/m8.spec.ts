@@ -196,8 +196,8 @@ test('help: quick help on hover, full help with ? and Esc (SH-12, SH-12a)', asyn
   await page.keyboard.press('Shift+Slash');
   const dialog = page.getByRole('dialog', { name: 'Help' });
   await expect(dialog).toBeVisible();
-  // M9: version 0.9.0 (was 0.8.0).
-  await expect(dialog).toContainText('0.9.0');
+  // M10: version 0.10.0 (was 0.9.0).
+  await expect(dialog).toContainText('0.10.0');
   expect(await page.evaluate(() => window.__hub!.help())).toBe(true);
   await page.keyboard.press('Escape');
   await expect(dialog).toHaveCount(0);

@@ -1,10 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { Float32BufferAttribute, type BufferGeometry } from 'three';
+import { BoxGeometry, Float32BufferAttribute, type BufferGeometry } from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { brand } from '../../../../src/config/brand';
-import { FLEET_CLASS_ORDER } from '../../../../src/config/fleet';
+import { FLEET_CLASSES, FLEET_CLASS_ORDER } from '../../../../src/config/fleet';
 import {
   checkModelContract,
   decodeFleetModel,
@@ -17,7 +17,7 @@ import {
   type Lod,
 } from '../../../../src/render/assets/fleetModels';
 import { vehicleAsset, type VehicleAsset } from '../../../../src/render/assets/vehicles';
-import { triangleCount } from '../../../../src/render/kit/assemble';
+import { assemble, paint, place, triangleCount } from '../../../../src/render/kit/assemble';
 import { darkPalette, lightPalette } from '../../../../src/render/palette';
 import type { VehicleClass } from '../../../../src/sim/types';
 import { colours, extent, rgb } from '../kit/helpers';
@@ -46,9 +46,24 @@ const near = (c: readonly number[], hex: string, tol = 1 / 255): boolean => {
 };
 const hasColour = (g: BufferGeometry, hex: string): boolean => colours(g).some((c) => near(c, hex));
 
-/** A conforming synthetic model: the procedural car at LOD1, and the same car with every triangle doubled at LOD0. */
+/**
+ * A conforming synthetic model: a box car filling the class footprint at LOD1, and the same car with every
+ * triangle doubled at LOD0. (Stage 4 fix: the procedural car has ~2,000 triangles, over the LOD1 budget.)
+ */
 function syntheticModel(cls: VehicleClass): FleetModel {
-  const low = vehicleAsset(cls, darkPalette);
+  const { length: l, width: w } = FLEET_CLASSES[cls];
+  const part = (sx: number, sy: number, sz: number, colour: string, x: number, y: number, z = 0): BufferGeometry =>
+    place(paint(new BoxGeometry(sx, sy, sz), colour), { x, y, z });
+  const low: VehicleAsset = {
+    paint: assemble([part(l - 0.2, 0.7, w * 0.9, '#FFFFFF', 0, 0.6), part(l * 0.5, 0.5, w * 0.8, '#FFFFFF', -0.1, 1.2)]),
+    trim: assemble([
+      ...[1, -1].flatMap((sx) => [1, -1].map((sz) => part(0.6, 0.6, 0.25, '#1C1D22', sx * l * 0.3, 0.3, sz * (w / 2 - 0.15)))),
+      part(0.1, 0.2, w * 0.9, '#3A3D45', l / 2 - 0.05, 0.35),
+      part(0.1, 0.2, w * 0.9, '#3A3D45', -l / 2 + 0.05, 0.35),
+      part(l * 0.45, 0.4, w * 0.82, darkPalette.glass, -0.1, 1.2),
+    ]),
+    lamps: assemble([part(0.05, 0.12, 0.3, '#FFF3C4', l / 2 - 0.12, 0.75), part(0.05, 0.12, 0.3, '#E0262B', -l / 2 + 0.12, 0.75)]),
+  };
   const double = (g: BufferGeometry): BufferGeometry => mergeGeometries([g.clone(), g.clone()]);
   return { lods: { 0: { paint: double(low.paint), trim: double(low.trim), lamps: double(low.lamps) }, 1: low } };
 }

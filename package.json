@@ -1,7 +1,7 @@
 {
   "name": "goldlane-hub",
   "private": true,
-  "version": "0.9.0",
+  "version": "0.10.0",
   "license": "MIT",
   "description": "GoldLane Hub: Pacific Gateway Fleet Ops - a living 3D fleet-operations world in one HTML file",
   "type": "module",
@@ -19,6 +19,7 @@
     "test:soak": "vitest run --config vitest.soak.config.ts",
     "test:e2e": "vite build --mode test && playwright test",
     "screenshots": "vite build --mode test && node scripts/screenshots.mjs",
+    "models": "node scripts/models.mjs",
     "coverage": "vitest run --coverage",
     "check": "npm run typecheck && npm run lint && npm run test"
   },
@@ -38,6 +39,7 @@
     "eslint": "^10.12.0",
     "fast-check": "^4.10.2",
     "globals": "^17.13.0",
+    "gltfpack": "1.3.0",
     "jsdom": "^29.1.1",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.71.1",

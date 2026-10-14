@@ -21,7 +21,6 @@ import { personAsset, walkBob } from './assets/people';
 import { vehicleAsset, type VehicleAssetKind } from './assets/vehicles';
 import type { FleetModel, Lod } from './assets/fleetModels';
 import type { VehicleClass } from '../sim/types';
-import { notImplemented } from '../shared/notImplemented';
 import type { PoseSample } from './interp';
 import type { Palette } from './palette';
 import { createInstanceRegistry, type InstanceRegistry } from './registry';
@@ -149,6 +148,20 @@ export function createAgentLayer(palette: Palette): AgentLayer {
     const lampMesh = pool(key, asset.lamps, lampMaterial, false);
     all.set(key, { registry: createInstanceRegistry(CAPACITY[key]), meshes: [paintMesh, trimMesh, lampMesh], tinted: FLEET_KEYS.has(key) ? paintMesh : null, pickMesh: paintMesh });
   }
+  // M10 (M10-5): Blender models replace a fleet class's geometry in its three meshes; nothing else changes.
+  const models = new Map<VehicleClass, FleetModel>();
+  let lod: Lod = 0;
+  const applyModel = (cls: VehicleClass): void => {
+    const model = models.get(cls);
+    const v = all.get(cls);
+    if (!model || !v) return;
+    const asset = model.lods[lod];
+    const [paintMesh, trimMesh, lampMesh] = v.meshes;
+    if (paintMesh) paintMesh.geometry = asset.paint;
+    if (trimMesh) trimMesh.geometry = asset.trim;
+    if (lampMesh) lampMesh.geometry = asset.lamps;
+  };
+
   const person = personAsset('customer');
   const clothes = pool('pedestrian', person.clothing, solid(), true);
   const skin = pool('pedestrian', person.skin, solid(), true);
@@ -293,14 +306,20 @@ export function createAgentLayer(palette: Palette): AgentLayer {
     setPalette() {
       // Vehicle colours are baked into the Pixar-style assets and stay the same in both themes.
     },
-    setFleetModels(models) {
-      notImplemented(models);
+    setFleetModels(loaded) {
+      for (const [cls, model] of loaded) {
+        if (!model) continue;
+        models.set(cls, model);
+        applyModel(cls);
+      }
     },
-    setDetail(lod) {
-      notImplemented(lod);
+    setDetail(next) {
+      if (next === lod) return;
+      lod = next;
+      for (const cls of models.keys()) applyModel(cls);
     },
     modelInfo() {
-      return notImplemented();
+      return Object.fromEntries(FLEET_CLASS_ORDER.map((cls) => [cls, { source: models.has(cls) ? 'blender' : 'procedural', lod }])) as Record<VehicleClass, ModelInfo>;
     },
   };
 }

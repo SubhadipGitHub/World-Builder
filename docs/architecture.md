@@ -1557,10 +1557,10 @@ type KpiId = 'turnaround' | 'utilisation' | 'evSoc' | 'revenue';
 
   M9 adds +24 at tier 0, against an estimate of ≤ +20. The estimate missed that the 4 new classes' paint and trim meshes also draw in the tier-0 shadow pass (+8). The rest is 12 car meshes, 2 particle meshes and the 2-part windsock. At tier 2 (no shadows) it adds +13 (budget +14). Both absolute limits hold with a wide margin. **To confirm** (§14.7).
 
-## 23. M10: Blender car models (design approved 2026-10-14; Stage 3 tests written, awaiting approval)
+## 23. M10: Blender car models (design approved 2026-10-14; implemented, awaiting review)
 
 Implements requirements §15 (BM-1…BM-14, D61–D64). It has three parts:
-1. **Authoring** (`tools/blender/`, `scripts/models.mts`): Blender Python builds each class's LOD0 and LOD1, and `gltfpack` compresses them. This runs on a developer machine only.
+1. **Authoring** (`tools/blender/`, `scripts/models.mjs`): Blender Python builds each class's LOD0 and LOD1, and `gltfpack` compresses them. This runs on a developer machine only.
 2. **Decoding** (`src/render/assets/fleetModels.ts`): the committed models are decoded, checked against the contract, and turned into the same `{ paint, trim, lamps }` geometries the procedural cars use.
 3. **Swapping** (`src/render/agents.ts`): the instanced meshes switch geometry in place when the models arrive and when the quality tier crosses tier 2.
 
@@ -1572,7 +1572,7 @@ The core rule (§1) holds: the models are render-only, and `src/sim/` is untouch
 | `tools/blender/common.py` (new) | Blender Python | Shared building blocks: the frame (BM-4), the material slots `paint`, `trim` and `lamps` (BM-6), byte vertex colours set as sRGB, wheels (tyre with sidewall bevel and tread, hubcap), head- and taillights, mirrors, the livery stripe and door mark, panel-line insets, LOD1 reduction rules (BM-11), triangle counting, a footprint and ground check, and glTF export |
 | `tools/blender/<class>.py` × 7 (new) | Blender Python | One `build(spec, lod) -> list[Object]` per class: body profile, cabin and glasshouse, and class details (roof rails, beltline chrome, sliding-door line, bed and tailgate, light bar) |
 | `tools/blender/build.py` (new) | Blender Python | The entry point run by `blender --background --factory-startup --python build.py -- <class> <spec.json> <out.glb>`. It builds `LOD0` and `LOD1` as two named root nodes in one scene, asserts the triangle budgets, footprint and ground contact, and exits non-zero on any failure |
-| `scripts/models.mts` (new) | Node (type-stripped TS) | `npm run models`. It reads `FLEET_CLASSES` (footprints) from `src/config/fleet.ts`, then for each class writes a spec JSON, runs Blender (`BLENDER_PATH`, default `C:\Program Files\Blender Foundation\Blender 5.2\blender.exe`), runs `gltfpack -cc -kn -km`, and writes `src/render/assets/models/<class>.glb` plus `manifest.json` (triangles and bounds per class and LOD) |
+| `scripts/models.mjs` (new) | Node script (imports `fleet.ts` with type stripping) | `npm run models`. It reads `FLEET_CLASSES` (footprints) from `src/config/fleet.ts`, then for each class writes a spec JSON, runs Blender (`BLENDER_PATH`, default `C:\Program Files\Blender Foundation\Blender 5.2\blender.exe`), runs `gltfpack -cc -kn -km`, and writes `src/render/assets/models/<class>.glb` plus `manifest.json` (triangles and bounds per class and LOD) |
 | `src/render/assets/models/*.glb`, `manifest.json` (new, generated) | data | Committed output (BM-2). Marked `binary linguist-generated` in `.gitattributes` |
 | `src/render/assets/fleetModels.ts` (new) | render | `MODEL_SOURCES` (eager `import.meta.glob('./models/*.glb', { query: '?inline' })`, giving data URIs); `decodeFleetModel(bytes, cls, palette)`; `checkModelContract(model, cls)`; `loadFleetModels(palette)`; `lodForTier(tier)` |
 | `src/render/agents.ts` | render | `setFleetModels(models)`, `setDetail(lod)` and `modelInfo()` on `AgentLayer`; keeps each class's procedural asset for fallback |
@@ -1584,7 +1584,7 @@ The core rule (§1) holds: the models are render-only, and `src/sim/` is untouch
 | # | Decision | Why |
 |---|---|---|
 | M10-1 | **One `.glb` per class, holding both LODs** as root nodes named `LOD0` and `LOD1`. | A broken model costs only its own class (BM-13), and tests and diffs are per class. |
-| M10-2 | **Footprints come from `FLEET_CLASSES`.** `models.mts` imports `src/config/fleet.ts` directly (Node 24 strips the types; the file has no runtime imports) and passes length and width to Blender as JSON. Blender never hard-codes a size. | One source of truth (F1). A footprint change followed by `npm run models` resizes the models. |
+| M10-2 | **Footprints come from `FLEET_CLASSES`.** `models.mjs` imports `src/config/fleet.ts` directly (Node 24 strips the types; the file has no runtime imports) and passes length and width to Blender as JSON. Blender never hard-codes a size. | One source of truth (F1). A footprint change followed by `npm run models` resizes the models. |
 | M10-3 | **Two reserved sentinel colours in `trim`**, replaced at decode time: magenta `#FF00FF` → `palette.glass`, and cyan `#00FFFF` → `brand.colors.accent`. Everything else is baked as authored. | Glass follows the palette as the procedural cars' glass does. The livery follows `brand`, so a rebrand stays a config swap (D5) with no Blender rebuild. Pure 0/1 channel values survive gltfpack's 8-bit colour quantisation exactly. |
 | M10-4 | **Decoding dequantises to `Float32` and applies node transforms**, then merges each LOD's primitives by material name into exactly three indexed geometries with `position`, `normal` and `color` only. | gltfpack stores positions as normalised `Int16` with the scale in the node matrix (`KHR_mesh_quantization`). `applyMatrix4` on a quantised attribute would re-quantise, so floats come first. This gives the same attribute set as `assemble()`, so the existing materials work unchanged. |
 | M10-5 | **Swap the geometry, not the mesh.** `InstancedMesh.geometry` is replaced for the class's three meshes. Instance matrices and colours live on the mesh, so poses, tints, registry slots, picking and the shadow pass carry over with no rebuild and no flicker. Procedural geometries are kept, not disposed. | BM-12 to BM-14. Draw calls stay at 3 per class. |
@@ -1695,3 +1695,29 @@ If the measured bundle goes over +250 KB, LOD0 drops to 4,500 triangles first (�
   - Unit: 782 pass and 77 fail: the 76 new M10 tests, plus 1 existing simulation test that timed out (below).
   - E2E: the 3 M10 tests and the 2 updated CSP tests fail as intended.
 - **Pre-existing flake, not caused by M10:** in the full unit run, one heavy simulation test exceeds Vitest's 5 s default timeout. It was a different test in each of two runs (the traffic merge property test, then "extra crew washes take ×0.7 as long"). Both pass when run alone (17/17 and 14/14), and M10 changes nothing in `src/sim/`. It is worth a separate `testTimeout` fix.
+
+### 23.11 Implementation notes (Stage 4, 2026-10-14)
+- **How the bodies are built** (`tools/blender/common.py`):
+  - Each body is a loft of superellipse sections along x. The plan view rounds the nose and tail corners; the side profile comes from per-class keys.
+  - The glasshouse is a second loft. It has an upper-arc section with tumblehome. Its faces are coloured by position: roof, windscreen and back glass, side glass, and A-, B- and C-pillars (plus D on the SUV and minivan). This gives framed windows with no extra geometry.
+  - Wheel arches are an exact boolean (one cylinder per wheel). The pickup's bed is a second boolean box, with its floor above the arches.
+  - Bumpers are swept around the plan outline. Tyres and hubcaps are lathed. The livery stripe, door mark, door lines, handles and the luxury beltline are ribbons that follow the body surface.
+  - LOD1 uses the same code with lower resolution and no panel lines (BM-11).
+- **gltfpack drops `COLOR_0` from an all-white primitive** (the paint). In glTF a missing vertex colour means white, so the decoder treats it as white (M10-4).
+- **`vite.config.ts` gains `assetsInclude: ['**/*.glb']`**, since Vite doesn't know the extension. That is what lets `?inline` turn a model into a data URI in both the build and Vitest.
+- **The manifest is measured from the packed file**, by three's `GLTFLoader` in Node. It is not taken from Blender, so any triangles that gltfpack's clean-up removes are already accounted for (M10-10).
+- **The preview render** (`MODELS_PREVIEW=<dir>`) uses Workbench with sample paint, glass and livery colours. It was used to tune every class (for example, the SUV's roof rails are seated on the curved roof with `Car.roof_z`).
+- **Stage 3 test fix:** the synthetic "conforming" model in `fleetModels.test.ts` used the procedural sedan as its LOD1. That car has 1,972 triangles, over the 1,500 LOD1 budget, so the contract rightly rejected it. The synthetic model is now a box car sized to the class footprint. No assertion changed.
+- **Version 0.10.0:** `package.json`, the CHANGELOG, the README ("Car models"), and the three version assertions (`m8.spec.ts`, `publishing.test.ts`, `help.test.ts`), each with a note.
+
+| Class | LOD0 triangles | LOD1 triangles | Height (m; procedural) | Packed | Embedded, gzipped |
+|---|---|---|---|---|---|
+| Economy | 4,862 | 1,110 | 1.38 (1.385) | 38.1 KB | 27.2 KB |
+| Sedan | 4,848 | 1,122 | 1.30 (1.305) | 38.6 KB | 27.7 KB |
+| Luxury | 4,900 | 1,130 | 1.27 (1.215) | 39.0 KB | 27.9 KB |
+| SUV | 4,934 | 1,138 | 1.70 (1.740) | 39.8 KB | 27.4 KB |
+| Minivan | 4,938 | 1,134 | 1.84 (1.855) | 38.8 KB | 27.4 KB |
+| Pickup | 4,696 | 1,134 | 1.69 (1.695) | 38.7 KB | 27.4 KB |
+| EV | 4,808 | 1,102 | 1.43 (1.435) | 38.3 KB | 27.2 KB |
+
+The spike projected ≈ 180 KB embedded for the set. The real total is 192 KB: car bodies compress a little worse than the spike's bevelled boxes (§23.9).

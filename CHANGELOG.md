@@ -4,6 +4,22 @@ All notable changes to GoldLane Hub, one entry per milestone. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 The full specification for each milestone is in `docs/requirements.md` and `docs/architecture.md`.
 
+## [0.10.0] - 2026-10-14
+
+M10: Blender car models (requirements §15).
+
+### Added
+- All seven rental classes are new game-quality models built in Blender: shaped bodies with wheel arches,
+  glass set into window frames, door lines and handles, wrap-around bumpers, a grille, and tyres with
+  hubcaps. Each class keeps its look: the hatch's steep tail, the saloon's chrome beltline, the SUV's roof
+  rails, the minivan's sliding-door line, the pickup's open bed, and the EV's light bar and glass roof.
+- A simpler version of each car on the lowest quality tier, switched automatically with the tier.
+- `npm run models` rebuilds the models from the scripts in `tools/blender/` (needs Blender 5.2).
+
+### Changed
+- The page's security policy also allows WebAssembly, which the model decoder needs. JavaScript `eval`
+  stays blocked, and browsers without support keep the previous built-in cars.
+
 ## [0.9.0] - 2026-10-13
 
 M9: fleet economics, sound, weather effects and notifications (requirements §14).

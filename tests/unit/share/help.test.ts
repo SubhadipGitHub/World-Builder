@@ -37,10 +37,10 @@ describe('shortcuts (SH-12, J9)', () => {
 });
 
 describe('version (SH-3, J12)', () => {
-  // M9: 0.9.0 (was 0.8.0).
-  it('is package.json version 0.9.0, with an ISO build date', () => {
+  // M10: 0.10.0 (was 0.9.0).
+  it('is package.json version 0.10.0, with an ISO build date', () => {
     const pkg = JSON.parse(readFileSync(resolve('package.json'), 'utf8')) as { version: string };
-    expect(pkg.version).toBe('0.9.0');
+    expect(pkg.version).toBe('0.10.0');
     expect(APP_VERSION).toBe(pkg.version);
     expect(BUILD_DATE).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });

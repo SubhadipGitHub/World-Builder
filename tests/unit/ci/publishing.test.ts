@@ -58,8 +58,8 @@ describe('CHANGELOG and release notes (SH-14)', () => {
 
   it('has one entry per milestone, newest first', () => {
     const versions = [...log.matchAll(/^## \[(\d+\.\d+\.\d+)\] - (\d{4}-\d{2}-\d{2})$/gm)].map((m) => m[1]);
-    // M9 adds 0.9.0.
-    expect(versions).toEqual(['0.9.0', '0.8.0', '0.7.0', '0.6.0', '0.5.0', '0.4.0', '0.3.0', '0.2.0', '0.1.0']);
+    // M10 adds 0.10.0.
+    expect(versions).toEqual(['0.10.0', '0.9.0', '0.8.0', '0.7.0', '0.6.0', '0.5.0', '0.4.0', '0.3.0', '0.2.0', '0.1.0']);
   });
 
   it('prints one version section for the release notes', () => {

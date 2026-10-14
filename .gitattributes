@@ -1,0 +1,3 @@
+# Generated fleet car models (M10, architecture §23): binary, rebuilt by `npm run models`.
+*.glb binary linguist-generated
+src/render/assets/models/manifest.json linguist-generated

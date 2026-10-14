@@ -7,6 +7,7 @@ import { weather as weatherTable, type WeatherMode } from '../config/weather';
 import { hub, type AreaId } from '../layout/hub';
 import { areaById, unitMarker, unitPose } from '../layout/positions';
 import { createAgentLayer } from '../render/agents';
+import { loadFleetModels, lodForTier } from '../render/assets/fleetModels';
 import { createAtmosphere } from '../render/atmosphere';
 import { createCameraRig } from '../render/camera';
 import type { CameraLimits } from '../render/cameraMath';
@@ -190,6 +191,7 @@ function start(root: HTMLElement): void {
       sun.shadow.map = null;
     }
     resize();
+    agents.setDetail(lodForTier(tier)); // M10 (BM-14): LOD1 on tier 2
   };
   let qualityTier = quality.tier;
   applyQuality(qualityTier);
@@ -793,6 +795,16 @@ function start(root: HTMLElement): void {
   /** Set by the setQualityTier test hook: stops adaptive tier changes. */
   let pinnedTier: number | null = null;
 
+  let modelsLoadMs: number | null = null;
+  const loadModels = (): void => {
+    const start = performance.now();
+    void loadFleetModels(paletteFor(theme)).then((models) => {
+      agents.setFleetModels(models);
+      agents.setDetail(lodForTier(qualityTier));
+      modelsLoadMs = performance.now() - start;
+    });
+  };
+
   const frame = (now: number): void => {
     const rawDt = Math.max(0, (now - last) / 1000);
     const dt = Math.min(0.25, rawDt);
@@ -959,6 +971,8 @@ function start(root: HTMLElement): void {
       tableClock = 0;
       tables.value = tableData();
     }
+    // M10 (§23.4): the Blender car models decode after the first frame and replace the procedural cars in place.
+    if (!ready) setTimeout(loadModels, 0);
     ready = true;
     requestAnimationFrame(frame);
   };
@@ -1071,8 +1085,7 @@ function start(root: HTMLElement): void {
         return car.id;
       },
       fleetModels: () => agents.modelInfo(),
-      // M10 Stage 4 wires the after-first-frame load (§23.4); until then nothing loads.
-      fleetModelsLoadMs: () => null,
+      fleetModelsLoadMs: () => modelsLoadMs,
     };
     window.__hub = hooks;
   }
