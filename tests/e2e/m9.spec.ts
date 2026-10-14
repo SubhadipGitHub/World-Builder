@@ -54,7 +54,8 @@ test('sound stays off until the speaker is clicked, then runs with no requests a
   expect(remoteRequests).toEqual([]);
   const html = readFileSync(resolve('dist/index.html'), 'utf8');
   const csp = /<meta http-equiv="Content-Security-Policy" content="([^"]*)"/.exec(html)?.[1]?.replaceAll('&#39;', "'");
-  expect(csp).toBe("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:");
+  // M10 (M10-7) adds 'wasm-unsafe-eval' for the model decoder; sound itself needs no CSP change.
+  expect(csp).toBe("default-src 'none'; script-src 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'unsafe-inline'; img-src data: blob:");
   expect(errors).toEqual([]);
 });
 

@@ -40,7 +40,8 @@ test('builds into one self-contained file within the bundle budget (N-1, A10, M3
   expect(html.toString()).not.toMatch(/(src|href)=["']https?:/);
   // The CSP is injected at build time only (architecture §9); the dev server must not get it.
   const csp = /<meta http-equiv="Content-Security-Policy" content="([^"]*)"/.exec(html.toString())?.[1]?.replaceAll('&#39;', "'");
-  expect(csp).toMatch(/^default-src 'none'; script-src 'unsafe-inline';/);
+  // M10 (M10-7): 'wasm-unsafe-eval' lets the model decoder compile WebAssembly; JS eval stays blocked.
+  expect(csp).toMatch(/^default-src 'none'; script-src 'unsafe-inline' 'wasm-unsafe-eval';/);
 });
 
 test('loads offline, without errors, and the hub is alive (W-1, L-1, N-2)', async ({ page }) => {

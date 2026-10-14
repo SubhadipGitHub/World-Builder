@@ -1556,3 +1556,142 @@ type KpiId = 'turnaround' | 'utilisation' | 'evSoc' | 'revenue';
 | Airport, tier 2, night, thunderstorm | 75 | 88 | 150 |
 
   M9 adds +24 at tier 0, against an estimate of ≤ +20. The estimate missed that the 4 new classes' paint and trim meshes also draw in the tier-0 shadow pass (+8). The rest is 12 car meshes, 2 particle meshes and the 2-part windsock. At tier 2 (no shadows) it adds +13 (budget +14). Both absolute limits hold with a wide margin. **To confirm** (§14.7).
+
+## 23. M10: Blender car models (design approved 2026-10-14; Stage 3 tests written, awaiting approval)
+
+Implements requirements §15 (BM-1…BM-14, D61–D64). It has three parts:
+1. **Authoring** (`tools/blender/`, `scripts/models.mts`): Blender Python builds each class's LOD0 and LOD1, and `gltfpack` compresses them. This runs on a developer machine only.
+2. **Decoding** (`src/render/assets/fleetModels.ts`): the committed models are decoded, checked against the contract, and turned into the same `{ paint, trim, lamps }` geometries the procedural cars use.
+3. **Swapping** (`src/render/agents.ts`): the instanced meshes switch geometry in place when the models arrive and when the quality tier crosses tier 2.
+
+The core rule (§1) holds: the models are render-only, and `src/sim/` is untouched.
+
+### 23.1 Component breakdown
+| Module | Kind | Responsibility |
+|---|---|---|
+| `tools/blender/common.py` (new) | Blender Python | Shared building blocks: the frame (BM-4), the material slots `paint`, `trim` and `lamps` (BM-6), byte vertex colours set as sRGB, wheels (tyre with sidewall bevel and tread, hubcap), head- and taillights, mirrors, the livery stripe and door mark, panel-line insets, LOD1 reduction rules (BM-11), triangle counting, a footprint and ground check, and glTF export |
+| `tools/blender/<class>.py` × 7 (new) | Blender Python | One `build(spec, lod) -> list[Object]` per class: body profile, cabin and glasshouse, and class details (roof rails, beltline chrome, sliding-door line, bed and tailgate, light bar) |
+| `tools/blender/build.py` (new) | Blender Python | The entry point run by `blender --background --factory-startup --python build.py -- <class> <spec.json> <out.glb>`. It builds `LOD0` and `LOD1` as two named root nodes in one scene, asserts the triangle budgets, footprint and ground contact, and exits non-zero on any failure |
+| `scripts/models.mts` (new) | Node (type-stripped TS) | `npm run models`. It reads `FLEET_CLASSES` (footprints) from `src/config/fleet.ts`, then for each class writes a spec JSON, runs Blender (`BLENDER_PATH`, default `C:\Program Files\Blender Foundation\Blender 5.2\blender.exe`), runs `gltfpack -cc -kn -km`, and writes `src/render/assets/models/<class>.glb` plus `manifest.json` (triangles and bounds per class and LOD) |
+| `src/render/assets/models/*.glb`, `manifest.json` (new, generated) | data | Committed output (BM-2). Marked `binary linguist-generated` in `.gitattributes` |
+| `src/render/assets/fleetModels.ts` (new) | render | `MODEL_SOURCES` (eager `import.meta.glob('./models/*.glb', { query: '?inline' })`, giving data URIs); `decodeFleetModel(bytes, cls, palette)`; `checkModelContract(model, cls)`; `loadFleetModels(palette)`; `lodForTier(tier)` |
+| `src/render/agents.ts` | render | `setFleetModels(models)`, `setDetail(lod)` and `modelInfo()` on `AgentLayer`; keeps each class's procedural asset for fallback |
+| `src/app/main.ts` | wiring | §23.4 |
+| `src/app/testHooks.ts` | test | `fleetModels(): Record<VehicleClass, { source: 'blender' \| 'procedural'; lod: 0 \| 1 }>` |
+| `vite.config.ts` | build | The CSP gains `'wasm-unsafe-eval'` in `script-src` (M10-7) |
+
+### 23.2 Key decisions
+| # | Decision | Why |
+|---|---|---|
+| M10-1 | **One `.glb` per class, holding both LODs** as root nodes named `LOD0` and `LOD1`. | A broken model costs only its own class (BM-13), and tests and diffs are per class. |
+| M10-2 | **Footprints come from `FLEET_CLASSES`.** `models.mts` imports `src/config/fleet.ts` directly (Node 24 strips the types; the file has no runtime imports) and passes length and width to Blender as JSON. Blender never hard-codes a size. | One source of truth (F1). A footprint change followed by `npm run models` resizes the models. |
+| M10-3 | **Two reserved sentinel colours in `trim`**, replaced at decode time: magenta `#FF00FF` → `palette.glass`, and cyan `#00FFFF` → `brand.colors.accent`. Everything else is baked as authored. | Glass follows the palette as the procedural cars' glass does. The livery follows `brand`, so a rebrand stays a config swap (D5) with no Blender rebuild. Pure 0/1 channel values survive gltfpack's 8-bit colour quantisation exactly. |
+| M10-4 | **Decoding dequantises to `Float32` and applies node transforms**, then merges each LOD's primitives by material name into exactly three indexed geometries with `position`, `normal` and `color` only. | gltfpack stores positions as normalised `Int16` with the scale in the node matrix (`KHR_mesh_quantization`). `applyMatrix4` on a quantised attribute would re-quantise, so floats come first. This gives the same attribute set as `assemble()`, so the existing materials work unchanged. |
+| M10-5 | **Swap the geometry, not the mesh.** `InstancedMesh.geometry` is replaced for the class's three meshes. Instance matrices and colours live on the mesh, so poses, tints, registry slots, picking and the shadow pass carry over with no rebuild and no flicker. Procedural geometries are kept, not disposed. | BM-12 to BM-14. Draw calls stay at 3 per class. |
+| M10-6 | **Load after the first frame.** `main.ts` calls `loadFleetModels` from a `setTimeout(0)` after the first render. Each class decodes on its own (`Promise.allSettled`). A rejection or a contract failure leaves that class procedural and logs one `console.warn` naming it. | BM-13: the first frame is never delayed and failure stays per class. |
+| M10-7 | **CSP: add `'wasm-unsafe-eval'` to `script-src`** so the meshopt decoder (vendored in `three/examples/jsm/libs`, MIT) can compile its WebAssembly. JavaScript `eval` and `new Function` stay blocked. Measured in a spike (2026-10-14): a 3.3k-triangle test car takes 11.2 KB embedded (base64, gzipped) with meshopt and 36.2 KB without. The full set (≈ 52.5k triangles) projects to ≈ 180 KB with meshopt and ≈ 575 KB without, which would exceed the 600 KB file limit on its own. | BM-3 and the §15.6 bundle budget can't both hold without meshopt. Browsers that lack `'wasm-unsafe-eval'` (Safari < 16, Chrome < 97, Firefox < 102) fail to decode and keep the procedural cars (M10-6). **Needs approval** (§23.7). |
+| M10-8 | **`GLTFLoader.parse` on bytes, no `fetch`.** The data URI is base64-decoded with `atob` into a `Uint8Array`. | No `connect-src` is needed (`default-src 'none'` still applies), and it works the same in Node for tests. |
+| M10-9 | **The tier-to-LOD rule is one pure function:** `lodForTier(tier) = tier >= 2 ? 1 : 0`. `main.ts` calls `agents.setDetail(lodForTier(tier))` wherever it already calls `applyQuality`. | BM-14 and Q3 (tier 1 keeps LOD0). Unit-testable. |
+| M10-10 | **A manifest guards the committed files.** `manifest.json` records the triangles and bounds per class and LOD at generation time, and a unit test decodes every `.glb` and compares. | BM-2: a stale or hand-edited model fails CI even though CI can't run Blender. |
+
+### 23.3 Contracts
+```ts
+// render/assets/fleetModels.ts
+type Lod = 0 | 1;
+interface FleetModel { readonly lods: Readonly<Record<Lod, VehicleAsset>> }   // VehicleAsset = { paint, trim, lamps }
+const GLASS_SENTINEL = '#FF00FF';
+const LIVERY_SENTINEL = '#00FFFF';
+const TRIANGLE_BUDGET: Readonly<Record<Lod, number>> = { 0: 6000, 1: 1500 };   // BM-8
+
+function decodeFleetModel(bytes: Uint8Array, cls: VehicleClass, palette: Palette): Promise<FleetModel>; // rejects on parse or contract failure
+/** Every BM-4…BM-8 violation as a readable string; [] = conforms. Pure, so it is testable on synthetic geometry. */
+function checkModelContract(model: FleetModel, cls: VehicleClass): string[];
+function loadFleetModels(palette: Palette, sources?: Readonly<Partial<Record<VehicleClass, string>>>): Promise<Map<VehicleClass, FleetModel | null>>;
+function lodForTier(tier: number): Lod;
+
+// render/agents.ts (AgentLayer additions)
+setFleetModels(models: ReadonlyMap<VehicleClass, FleetModel | null>): void;
+setDetail(lod: Lod): void;
+modelInfo(): Readonly<Record<VehicleClass, { source: 'blender' | 'procedural'; lod: Lod }>>;
+```
+
+**Contract checks** (`checkModelContract`, per LOD):
+- **Frame and ground (BM-4):** min y within ±0.02 m of 0; the bounding box centred on x and z within ±0.05 m.
+- **Footprint (BM-5):** length ≤ class length, width ≤ class width (+0.01 m tolerance).
+- **Height (BM-5):** within ±10% of the procedural car's height. This is checked in the unit test only, against `vehicleAsset(cls)`, since the runtime has no need for it.
+- **Parts (BM-6):** all three geometries are non-empty and carry `position`, `normal` and `color`. Every `paint` vertex is white. No sentinel colour is left after replacement. `lamps` has warm-white vertices at x > 0 and red vertices at x < 0.
+- **No textures (BM-7):** no `uv` attribute. The decoder also rejects a file with any `images`, `textures` or `samplers`.
+- **Budgets (BM-8):** triangles across the three parts ≤ `TRIANGLE_BUDGET[lod]`, and LOD1 < LOD0.
+
+### 23.4 Wiring (`main.ts`)
+1. `createAgentLayer` is unchanged: the procedural cars are drawn from frame 1.
+2. After the first `renderer.render`, `setTimeout(0)` → `loadFleetModels(paletteFor(theme))` → `agents.setFleetModels(result)` → `agents.setDetail(lodForTier(qualityTier))`.
+3. `applyQuality(tier)` (the adaptive path and the `setQualityTier` hook) also calls `agents.setDetail(lodForTier(tier))`.
+4. The test hook `fleetModels()` returns `agents.modelInfo()`.
+
+### 23.5 Performance plan
+| Item | Cost | Budget |
+|---|---|---|
+| Draw calls | None added: 3 per class, as today (M10-5) | ≤ 300 at tier 0, ≤ 150 at tier 2 |
+| Triangles at tiers 0–1 | ≈ 60 cars × ≤ 6k = ≤ 360k, plus the paint and trim in the shadow pass (tiers 0 and 1) | Desktop 60 fps target. A slow device drops to tier 2 through the existing controller |
+| Triangles at tier 2 | ≈ 60 × ≤ 1.5k = ≤ 90k, no shadow pass | — |
+| Bundle | Models ≈ 180 KB (spike projection) + `GLTFLoader` ≈ 20 KB + meshopt decoder ≈ 7 KB, all gzipped | ≤ +250 KB. The total is ≈ 450 KB of 600 (M9 production was 240.6 KB) |
+| Decode | 7 files, meshopt WASM plus merging ≈ tens of ms on a laptop, after the first frame | ≤ 300 ms (§15.6), measured in E2E |
+| GPU memory | Three geometries per class and LOD, plus the procedural ones kept: a few MB | — |
+
+If the measured bundle goes over +250 KB, LOD0 drops to 4,500 triangles first (§15.6), by changing `TRIANGLE_BUDGET` and the scripts' segment counts, then re-running `npm run models`.
+
+### 23.6 Security and privacy
+- **CSP (M10-7):** `'wasm-unsafe-eval'` lets the page compile WebAssembly modules. String-to-code JavaScript stays blocked. The only WebAssembly in the bundle is the meshopt decoder, vendored from `three` (no CDN, no network). Nothing user-controlled reaches the decoder: models are build-time inputs from our own scripts, and deep links can't name or supply a model.
+- **No new network access:** the models are decoded from inline data (M10-8), and the CSP keeps `default-src 'none'`.
+- **Build-time tools** (Blender, gltfpack) run only on a developer's machine. `gltfpack` is a dev dependency pinned to an exact version, and its output is committed and checked by the manifest test (M10-10).
+- **N-7:** model shapes are original. The scripts contain no reference meshes, and no real grille, badge or lamp signature.
+
+### 23.7 Resolved (Stage 2, approved 2026-10-14)
+- **CSP change (M10-7): approved.** **Add `'wasm-unsafe-eval'`**, which keeps the approved 6,000 / 1,500 triangle budgets. The alternative, with no CSP change, is to drop meshopt and cut the budgets to about 2,500 (LOD0) and 800 (LOD1) triangles per class to fit +250 KB. That is closer to today's procedural detail.
+
+### 23.8 Test plan (Stage 3 preview)
+| Layer | What's tested |
+|---|---|
+| Unit: `fleetModels` (committed files) | For each of the 7 classes and both LODs: the `.glb` decodes in Node; `checkModelContract` is `[]`; the height is within ±10% of `vehicleAsset(cls)`; triangles and bounds match `manifest.json`; the trim contains `palette.glass` and `brand.colors.accent` and no sentinel; a decoded tyre colour equals `new Color(TYRE)`; LOD1 < LOD0 |
+| Unit: `checkModelContract` | Synthetic geometries trip each rule: off the ground, off centre, over the footprint, a tinted paint vertex, a sentinel left behind, no taillights, a `uv` attribute, over budget |
+| Unit: `decodeFleetModel` / `loadFleetModels` | Corrupt bytes → that class is `null` and exactly one warning names it; a valid file with an image is rejected; the other classes still load; sentinel replacement follows the palette passed in |
+| Unit: `lodForTier` | 0 → 0, 1 → 0, 2 → 1 |
+| Unit: `agents` | Before `setFleetModels`, all classes are `procedural`; afterwards `blender`, with the same `InstancedMesh` objects (identity) and 3 meshes per class; a `null` class stays procedural; `setDetail(1)` swaps to the LOD1 geometry and `setDetail(0)` back; instance colours survive a swap |
+| E2E (`tests/e2e/m10.spec.ts`) | Within 2 s of load, `fleetModels()` reports `blender` and LOD 0 for all 7 classes; `setQualityTier(2)` → LOD 1, then `setQualityTier(0)` → LOD 0; draw calls are unchanged against the M9 table (§22.11) at tier 0 and tier 2; the CSP is the new string; the bundle is ≤ 600 KB; no console warnings or errors |
+| Manual (needs Blender) | Running `npm run models` twice leaves `manifest.json` unchanged (BM-2) |
+
+**Existing tests that change (each with a note):**
+- `tests/e2e/m1.spec.ts` and `tests/e2e/m9.spec.ts`: the CSP assertion gains `'wasm-unsafe-eval'` (M10-7).
+- The screenshot set (SH-10) is regenerated.
+
+### 23.9 Risks
+| Risk | Mitigation |
+|---|---|
+| Real car bodies compress worse than the spike's bevelled boxes | The bundle is measured in E2E. The first lever is LOD0 at 4,500 triangles (§23.5) |
+| 360k triangles plus shadows strain phones at tier 1 | The existing adaptive controller drops to tier 2 (LOD1, no shadows). Real-device testing is already deferred (§8.3) |
+| A gltfpack or Blender exporter upgrade changes the output | Both are pinned (gltfpack exactly; Blender 5.2 in `BLENDER_PATH`), and the manifest test catches drift |
+| A colour-space mismatch (the models look washed out next to the procedural props) | The scripts set colours through `color_srgb`; the exporter writes linear `COLOR_0`, which three reads as linear, as `paint()` does. A unit test compares a decoded tyre colour with `new Color(TYRE)` |
+| Generated binaries bloat the repo history | ≈ 30 KB per class per regeneration; regenerate only when the scripts change |
+| A three upgrade changes how `GLTFLoader` handles quantised attributes | M10-4 dequantises through the attribute accessors (`getX`), not raw arrays, and the committed-file tests cover it |
+
+### 23.10 Stage 3 status (2026-10-14)
+- **Contracts, typed and stubbed** (`notImplemented`; behaviour is unchanged, and nothing loads yet):
+  - `src/render/assets/fleetModels.ts` (new): `Lod`, `FleetModel`, `GLASS_SENTINEL`, `LIVERY_SENTINEL`, `TRIANGLE_BUDGET`, `lodForTier`, `checkModelContract`, `decodeFleetModel` and `loadFleetModels`.
+  - `src/render/agents.ts`: `AgentLayer.setFleetModels`, `setDetail` and `modelInfo`, plus the `ModelInfo` type.
+  - `src/app/testHooks.ts` and `main.ts`: `fleetModels()` and `fleetModelsLoadMs()`. The latter returns null until Stage 4 wires the load.
+- **Contract details fixed by the tests:**
+  - `checkModelContract` messages start with their rule id (`"BM-5: …"`).
+  - `loadFleetModels(palette, sources)` uses `sources` instead of the committed models, not merged with them. A class without a source is `null`, with a warning.
+  - `manifest.json` is `{ [cls]: { lod0 | lod1: { triangles, min: [x, y, z], max: [x, y, z] } } }`, with bounds compared to 2 decimal places, as positions are quantised.
+  - The models' tyres use the procedural `TYRE` colour `#1C1D22`.
+- **New tests:**
+  - `tests/unit/render/assets/fleetModels.test.ts`: 71 tests (`lodForTier`, 14 synthetic contract cases, 3 malformed-input cases, 7 tests per class on the committed models, 3 load and fallback cases).
+  - `tests/unit/render/agents.m10.test.ts`: 5 tests (procedural start, in-place swap with mesh identity, LOD switching that keeps instance colours, LOD for late models, no new meshes).
+  - `tests/e2e/m10.spec.ts`: 3 tests (all 7 classes reach `blender` at LOD0 within 2 s and settle within 300 ms; LOD1 on tier 2 and back, within the draw-call budgets; the CSP string and the bundle budget).
+  - `tests/e2e/m1.spec.ts` and `m9.spec.ts`: the CSP assertions now expect `'wasm-unsafe-eval'`, each with a note.
+- **Results:**
+  - Typecheck and lint are clean.
+  - Unit: 782 pass and 77 fail: the 76 new M10 tests, plus 1 existing simulation test that timed out (below).
+  - E2E: the 3 M10 tests and the 2 updated CSP tests fail as intended.
+- **Pre-existing flake, not caused by M10:** in the full unit run, one heavy simulation test exceeds Vitest's 5 s default timeout. It was a different test in each of two runs (the traffic merge property test, then "extra crew washes take ×0.7 as long"). Both pass when run alone (17/17 and 14/14), and M10 changes nothing in `src/sim/`. It is worth a separate `testTimeout` fix.

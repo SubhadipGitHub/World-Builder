@@ -1070,6 +1070,9 @@ function start(root: HTMLElement): void {
         data.value = dashboardData();
         return car.id;
       },
+      fleetModels: () => agents.modelInfo(),
+      // M10 Stage 4 wires the after-first-frame load (§23.4); until then nothing loads.
+      fleetModelsLoadMs: () => null,
     };
     window.__hub = hooks;
   }

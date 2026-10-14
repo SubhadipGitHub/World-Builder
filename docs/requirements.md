@@ -33,6 +33,7 @@
 | D26–D39 | M7 ops realism (2026-10-13) | Faster gate cycle, an airport day demand curve, flights following the curve, Balanced targets, then the Stage 4 calibration decisions (§12.1). |
 | D40–D47 | M8 ship & share (2026-10-13) | GitHub Pages, Releases and an embed mode; full deep links; kiosk tour; screenshots; README, help overlay and changelog (§13.1). |
 | D48–D60 | M9 fleet economics, sound, weather FX & notifications (2026-10-13) | 7 rental classes with rates and service intervals, a revenue KPI, fog/storm/wind/particles, a procedural soundscape (muted by default) and alert toasts; D56–D60 are the Stage 4 calibration (§14.1). |
+| D61–D64 | M10 Blender car models (2026-10-14; approved) | The 7 fleet classes get Blender-authored models built by checked-in Python scripts, with a mid-poly LOD and a low-poly LOD by quality tier; the procedural cars stay as the fallback. Amends W-1 and D9 for these 7 models only (§15.1). |
 
 > Note on D2: the pack loads Three.js "from a CDN". We bundle it inline instead. The result is still one HTML file and it works offline.
 
@@ -65,7 +66,7 @@ The layout is stylised and fictional. It is inspired by a typical US airport ren
 ## 4. Functional requirements
 
 ### M1: Block 1, WORLD
-- **W-1** The scene is a low-poly isometric diorama built only from Three.js primitives and procedural geometry. No external model or texture files.
+- **W-1** The scene is a low-poly isometric diorama built only from Three.js primitives and procedural geometry. No external model or texture files. *(Amended by M10, approved 2026-10-14: the 7 fleet car classes may use Blender-authored models embedded in the single file, with no textures; see §15.)*
 - **W-2** It contains all 7 buildings and zones and all 5 vehicle and mobile-unit types from §3. Car models are stylised and recognisable by silhouette (compact crossover EV, large boxy SUV, mid-size sedan), with no manufacturer logos.
 - **W-3** Visual style: clean, toy-like clay look, soft shadows, amber-gold accent. Dark graphite scene by default, with a light variant.
 - **W-4** Repeated objects (parked cars, parking-bay markings, light poles, palms, pedestrians) use `InstancedMesh`.
@@ -932,4 +933,76 @@ Goal: the hub earns money, sounds alive and tells you when something needs atten
 - **Q4 Revenue reset:** **at hub midnight** ("Revenue today"); the running total is in the test hooks only.
 - **Q5 Mute key:** **`M`** (no existing shortcut uses it).
 - **Draw-call risk (§14.7), measured:** the highest tier-2 count so far is 76 (M6, airport area), so +14 stays well under 150.
+
+## 15. M10: Blender car models (APPROVED 2026-10-14)
+
+Goal: the 7 rental classes look like finished game assets (curved bodies, wheel arches, inset glass, panel lines) instead of stacked rounded boxes, without changing what the hub does or how cars are drawn. The simulation, dashboard and interaction are unchanged. Everything stays fictional (N-7) and in one offline file (N-1).
+
+### 15.1 Decisions
+| # | Decision | Choice |
+|---|---|---|
+| D61 | Authoring (2026-10-14) | **Scripted in Blender.** One Blender Python script per class plus a shared module, checked in under `tools/blender/`. No hand modelling: anyone can rebuild every model from source. |
+| D62 | Scope (2026-10-14) | **The 7 fleet classes only** (economy, sedan, luxury, SUV, minivan, pickup, EV). The shuttle, tow truck, service van, technician cart, patrol car and airport vehicles stay procedural. |
+| D63 | Detail (2026-10-14) | **Mid-poly with a low-poly LOD.** LOD0 on quality tiers 0–1, LOD1 on tier 2. |
+| D64 | Fallback (2026-10-14) | **The procedural cars stay**, drawn until the models are decoded and kept for good if decoding fails. |
+
+**W-1 and D9 are amended** for these 7 models only: they may be authored outside the code and embedded in the single file as model data. Still no texture or image files: colour is per-vertex, as today.
+
+### 15.2 Authoring pipeline
+- **BM-1 Scripts.** `tools/blender/` holds a shared module (units, materials, wheels, lights, livery, export) and one script per class. `npm run models` runs Blender headless (`--background --python`) for every class, then compresses the output. The Blender path comes from `BLENDER_PATH`, defaulting to the standard Windows install.
+- **BM-2 Committed output.** The compressed models are committed to `src/render/assets/models/`. `npm run build`, the tests and CI never need Blender. Re-running `npm run models` on unchanged scripts gives the same geometry (same vertex and triangle counts and bounds).
+- **BM-3 Compression.** Models are packed with `gltfpack` (meshopt compression and quantisation), which is a **new dev dependency**. They are decoded with three.js's own `GLTFLoader` and meshopt decoder, so there is **no new runtime dependency**. The meshopt decoder runs WebAssembly, which needs a CSP change (architecture M10-7, §23.7).
+
+### 15.3 Model contract (every class, every LOD)
+- **BM-4 Frame.** Metres; +X forward (front at +X), +Y up; centred on the footprint; wheels touching y = 0. This is the procedural frame (P2), so placement code is unchanged.
+- **BM-5 Footprint.** The model fits its class footprint in FE-2 (P10), and its height stays within ±10% of the procedural car's.
+- **BM-6 Parts.** Exactly three material slots, named `paint`, `trim` and `lamps`, which map onto the existing three parts:
+  - **paint:** body panels, vertex-coloured white, so the per-instance car colour tints them.
+  - **trim:** tyres, hubcaps, glass, frames, bumpers, grille, mirrors, the GoldLane livery stripe and door mark (B-4), and class details (beltline chrome, sliding-door line, bed liner).
+  - **lamps:** headlights (warm white) and taillights (red), which glow at night (V-2). The EV keeps its front light bar.
+- **BM-7 No textures, no brands.** No images, UVs or texture references. No real-brand cues: no grille shapes, badges or lights copied from a real car (N-7).
+- **BM-8 Detail budgets** (per class, all three parts together):
+
+  | LOD | Used on | Triangles |
+  |---|---|---|
+  | LOD0 | Tiers 0 and 1 | ≤ 6,000 |
+  | LOD1 | Tier 2 | ≤ 1,500 |
+
+### 15.4 Look
+- **BM-9 Style.** Still Pixar-style and toy-like (V-1): soft bevels, chunky proportions and slightly oversized wheels. New over the procedural cars: a shaped body with wheel arches, a curved roofline and a sloped windscreen, glass inset into frames, door and panel lines, a front grille, mirrors, and tyres with sidewall and tread bevels.
+- **BM-10 Silhouettes.** Every class stays recognisable from the default isometric camera, as in V-2 and FE-10: a short two-box hatch with a steep tail, a low three-box sedan, a long, low premium saloon with a bright beltline, a tall, boxy SUV with roof rails, a tall, rounded minivan with a sliding-door line, a crew-cab pickup with an open bed and tailgate, and a smooth EV crossover with a front light bar.
+- **BM-11 LOD1** keeps each class's silhouette, livery, lights and colour split. It drops the panel lines, tread and interior bevels.
+
+### 15.5 Runtime
+- **BM-12 Same drawing.** Each model's three parts replace the procedural paint, trim and lamps geometry for that class. Instancing, the per-instance tint, night glow, picking, selection rings and contact shadows are unchanged, and each class still costs 3 instanced draw calls (V-2).
+- **BM-13 Start-up and fallback.**
+  - The hub shows the procedural cars at once. The models decode in the background and replace them in place, with no flicker or pop of position.
+  - If a model fails to decode, or breaks the contract (BM-4 to BM-7), its class keeps the procedural car. A single console warning names the class. There is no user-facing error.
+  - The test hooks report each class's model source (`blender` or `procedural`) and LOD.
+- **BM-14 Tier changes.** When the quality tier crosses into or out of tier 2, each class swaps between LOD0 and LOD1 in place, without rebuilding its instanced meshes.
+
+### 15.6 Budgets and non-functional
+- **Bundle:** at most **+250 KB gzipped** for the models and loader code (total limit 600 KB; 240.6 KB in the M9 production build). This is the main risk: if it's exceeded, LOD0 drops to 4,500 triangles before anything else.
+- **Draw calls:** unchanged (≤ 300 at tier 0, ≤ 150 at tier 2).
+- **Triangles on screen:** about 60 cars × 6,000 = 360k at tiers 0–1 (plus the shadow pass), and 90k at tier 2.
+- **Start-up:** all models decoded within 300 ms of the first frame on a mid-range laptop. The first frame is never delayed by decoding.
+- **Simulation:** untouched. `src/sim/` gains no imports.
+- **Unchanged:** N-1, N-6, N-7, and every M1–M9 requirement and test.
+
+### 15.7 Testing
+- **Vitest, per class and LOD:** the committed model decodes in Node and passes the contract checks (frame and ground contact, footprint and height, exactly the three named slots, no textures or UVs, all-white paint, headlights at +X and taillights at −X, triangle budget).
+- **Vitest, runtime:** procedural geometry is used before decoding and after a failed decode (a corrupted model); a tier change into and out of tier 2 swaps the LOD without new meshes; the draw-call count per class stays 3.
+- **Playwright:** the built HTML reports `blender` for all 7 classes, stays within the draw-call and bundle budgets, and the screenshot set (SH-10) is refreshed.
+- **Manual:** `npm run models` rebuilds identical geometry (BM-2). This needs Blender, so it isn't part of CI.
+
+### 15.8 User stories
+- As a **viewer**, I zoom in on the EV row and see real-looking crossovers, with wheel arches, glass set into frames and a glowing light bar, all in GoldLane livery.
+- As a **viewer** on a weak laptop, the hub drops to tier 2 and the cars quietly switch to simpler models, with the same colours and silhouettes.
+- As a **developer**, I tweak the minivan's roofline in `tools/blender/minivan.py`, run `npm run models`, and see the change in `npm run dev`.
+
+### 15.9 Resolved (approved 2026-10-14: all proposed defaults accepted)
+- **Q1 Triangle budgets:** **6,000 for LOD0 and 1,500 for LOD1** (BM-8)?
+- **Q2 Bundle budget:** **+250 KB gzipped** (§15.6), with LOD0 cut to 4,500 if it's exceeded?
+- **Q3 Tier 1:** **LOD0** (phones start at tier 1), or LOD1 on tier 1 as well, to protect phones?
+- **Q4 Dev dependency:** **add `gltfpack`** (MIT) for compression?
 

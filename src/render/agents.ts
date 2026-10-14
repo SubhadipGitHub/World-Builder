@@ -19,6 +19,9 @@ import { FLEET_CLASS_ORDER } from '../config/fleet';
 import type { AgentView } from '../sim/world';
 import { personAsset, walkBob } from './assets/people';
 import { vehicleAsset, type VehicleAssetKind } from './assets/vehicles';
+import type { FleetModel, Lod } from './assets/fleetModels';
+import type { VehicleClass } from '../sim/types';
+import { notImplemented } from '../shared/notImplemented';
 import type { PoseSample } from './interp';
 import type { Palette } from './palette';
 import { createInstanceRegistry, type InstanceRegistry } from './registry';
@@ -36,6 +39,17 @@ export interface AgentLayer {
   /** The tow beacon flashes while towing (V-9). */
   setBeacon(on: boolean): void;
   setPalette(palette: Palette): void;
+  /** M10 (BM-12, M10-5): swaps each class with a model into it, in place; `null` classes stay procedural. */
+  setFleetModels(models: ReadonlyMap<VehicleClass, FleetModel | null>): void;
+  /** M10 (BM-14): the LOD Blender classes draw with; also applies to models that arrive later. */
+  setDetail(lod: Lod): void;
+  /** M10 (BM-13): each fleet class's model source and current LOD. */
+  modelInfo(): Readonly<Record<VehicleClass, ModelInfo>>;
+}
+
+export interface ModelInfo {
+  readonly source: 'blender' | 'procedural';
+  readonly lod: Lod;
 }
 
 type VisualKey = VehicleAssetKind | 'pedestrian';
@@ -278,6 +292,15 @@ export function createAgentLayer(palette: Palette): AgentLayer {
     },
     setPalette() {
       // Vehicle colours are baked into the Pixar-style assets and stay the same in both themes.
+    },
+    setFleetModels(models) {
+      notImplemented(models);
+    },
+    setDetail(lod) {
+      notImplemented(lod);
+    },
+    modelInfo() {
+      return notImplemented();
     },
   };
 }

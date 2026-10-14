@@ -8,6 +8,8 @@ import type { Theme } from '../ui/theme';
 import type { SoundEngineState } from '../audio/engine';
 import type { Wind } from '../render/wind';
 import type { RevenueView } from '../sim/revenue';
+import type { ModelInfo } from '../render/agents';
+import type { VehicleClass } from '../sim/types';
 
 /**
  * Test-only window.__hub, present only when built with VITE_TEST_HOOKS=1 (architecture §8).
@@ -87,6 +89,10 @@ export interface HubTestHooks {
   particleCount(): number;
   /** Raises a warning or critical maintenance alert for a fleet car on the map, as the simulation would; returns its id. */
   forceAlert(severity: 'warning' | 'critical'): string;
+  /** M10 (§23): each fleet class's model source ('blender' or 'procedural') and LOD (BM-13). */
+  fleetModels(): Readonly<Record<VehicleClass, ModelInfo>>;
+  /** M10: milliseconds from the first frame until every model settled, or null while still loading (§15.6). */
+  fleetModelsLoadMs(): number | null;
 }
 
 declare global {
